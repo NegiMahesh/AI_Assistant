@@ -1,0 +1,1 @@
+type Props = { text: string; }; export default function VoiceStatus({ text, }: Props) { if ( !text ) { return null; } return ( <div className="voice-status"> <span className="voice-pulse" /> { text } </div> ); }
