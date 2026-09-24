@@ -72,12 +72,11 @@ type Props = {
 };
 
 
-const DETECTION_INTERVAL =
-  300;
-
-
-const DETECTION_CONFIDENCE =
-  0.40;
+const DETECTION_INTERVAL = 450;
+const FACE_DETECTION_INTERVAL = 1200;
+const DETECTION_CONFIDENCE = 0.40;
+const CAPTURE_WIDTH = 640;
+const JPEG_QUALITY = 0.60;
 
 
 export default function CameraPanel({
@@ -118,6 +117,14 @@ export default function CameraPanel({
     useRef<number | null>(
       null
     );
+
+  const captureCanvasRef =
+    useRef<HTMLCanvasElement | null>(
+      null
+    );
+
+  const lastFaceDetectionRef =
+    useRef(0);
 
 
   const detectionRunningRef =
@@ -206,8 +213,8 @@ export default function CameraPanel({
       fpsStartRef.current =
         performance.now();
 
-      lastDetectionRef.current =
-        0;
+      lastDetectionRef.current = 0;
+      lastFaceDetectionRef.current = 0;
 
 
       animationFrameRef.current =
@@ -345,16 +352,14 @@ export default function CameraPanel({
       DETECTION_INTERVAL
     ) {
 
-      lastDetectionRef.current =
-        timestamp;
+      lastDetectionRef.current = timestamp;
 
-
-      if (
-        !detectionRunningRef.current
-      ) {
-
-        void detectFrame();
-
+      if (!detectionRunningRef.current) {
+        void detectFrame(
+          timestamp -
+            lastFaceDetectionRef.current >=
+          FACE_DETECTION_INTERVAL
+        );
       }
 
     }
@@ -372,7 +377,7 @@ export default function CameraPanel({
      DETECT FRAME
   ======================================================= */
 
-  async function detectFrame() {
+  async function detectFrame(runFaceDetection: boolean) {
 
     const video =
       videoRef.current;
@@ -397,17 +402,24 @@ export default function CameraPanel({
     try {
 
       const captureCanvas =
-        document.createElement(
-          "canvas"
-        );
+        captureCanvasRef.current ||
+        document.createElement("canvas");
 
+      captureCanvasRef.current =
+        captureCanvas;
+
+      const sourceWidth = video.videoWidth;
+      const sourceHeight = video.videoHeight;
+      const scale =
+        sourceWidth > CAPTURE_WIDTH
+          ? CAPTURE_WIDTH / sourceWidth
+          : 1;
 
       captureCanvas.width =
-        video.videoWidth;
-
+        Math.max(1, Math.round(sourceWidth * scale));
 
       captureCanvas.height =
-        video.videoHeight;
+        Math.max(1, Math.round(sourceHeight * scale));
 
 
       const context =
@@ -442,7 +454,7 @@ export default function CameraPanel({
             captureCanvas.toBlob(
               resolve,
               "image/jpeg",
-              0.65
+              JPEG_QUALITY
             )
         );
 
@@ -456,31 +468,33 @@ export default function CameraPanel({
       }
 
 
-      const [
-        yoloData,
-        faceData,
-      ] = await Promise.all([
-
+      const yoloPromise =
         detectObjects(
           blob,
           DETECTION_CONFIDENCE
-        ),
+        );
 
-        recognizeFaces(
-          blob
-        ),
+      const facePromise = runFaceDetection
+        ? recognizeFaces(blob)
+        : Promise.resolve({ faces: [] });
 
-      ]);
+      const [yoloData, faceData] =
+        await Promise.all([
+          yoloPromise,
+          facePromise,
+        ]);
 
+      if (runFaceDetection) {
+        lastFaceDetectionRef.current = performance.now();
+      }
 
       const newDetections =
-        yoloData.detections ||
-        [];
-
+        yoloData.detections || [];
 
       const newFaces =
-        faceData.faces ||
-        [];
+        runFaceDetection
+          ? faceData.faces || []
+          : faces;
 
 
       setDetections(
