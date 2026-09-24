@@ -25,8 +25,16 @@ from insightface.app import FaceAnalysis
 
 from speech.speech_to_text import transcribe_audio
 from tts.text_to_speech import speak
-from router.ai_router import route_input
+from router.ai_router import route_input, select_model
+
+from model_manager import (
+    chat as model_chat,
+    stream_chat as model_stream_chat,
+    GENERAL_MODEL,
+    model_status,
+)
 from file_reader.file_reader import read_file, get_file_info
+from tools.web_search import web_search
 
 from memory.memory import (
     save_memory,
@@ -1291,9 +1299,7 @@ def _parse_calendar_datetime(text):
     )
 
 
-def _extract_event_title(
-    text
-):
+def _extract_event_title(text):
 
     title = text.strip()
 
@@ -1302,11 +1308,10 @@ def _extract_event_title(
     # -----------------------------------------------------
 
     title = re.sub(
-        r"^\s*(please\s+)?"
-        r"(add|create|schedule|set|put|save|remember|book|plan)\s+",
+        r"^\s*(please\s+)?" r"(add|create|schedule|set|put|save|remember|book|plan)\s+",
         "",
         title,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
 
     # -----------------------------------------------------
@@ -1314,12 +1319,10 @@ def _extract_event_title(
     # -----------------------------------------------------
 
     title = re.sub(
-        r"^\s*(an?\s+)?"
-        r"(event|appointment|reminder|task)"
-        r"(?:\s+called)?\s*",
+        r"^\s*(an?\s+)?" r"(event|appointment|reminder|task)" r"(?:\s+called)?\s*",
         "",
         title,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
 
     # -----------------------------------------------------
@@ -1337,7 +1340,7 @@ def _extract_event_title(
         r".*$",
         "",
         title,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
 
     # -----------------------------------------------------
@@ -1345,42 +1348,26 @@ def _extract_event_title(
     # -----------------------------------------------------
 
     title = re.sub(
-        r"\s+(?:at|@)\s*\d{1,2}"
-        r"(?::\d{2})?\s*"
-        r"(?:a\.?m\.?|p\.?m\.?)"
-        r".*$",
+        r"\s+(?:at|@)\s*\d{1,2}" r"(?::\d{2})?\s*" r"(?:a\.?m\.?|p\.?m\.?)" r".*$",
         "",
         title,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
 
     # -----------------------------------------------------
     # REMOVE 24-HOUR TIME
     # -----------------------------------------------------
 
-    title = re.sub(
-        r"\s+(?:at|@)\s*[012]?\d:[0-5]\d.*$",
-        "",
-        title,
-        flags=re.IGNORECASE
-    )
+    title = re.sub(r"\s+(?:at|@)\s*[012]?\d:[0-5]\d.*$", "", title, flags=re.IGNORECASE)
 
     # -----------------------------------------------------
     # CLEAN EXTRA WORDS
     # -----------------------------------------------------
 
-    title = re.sub(
-        r"\s+",
-        " ",
-        title
-    ).strip(
-        " .,!?:;-"
-    )
+    title = re.sub(r"\s+", " ", title).strip(" .,!?:;-")
 
-    return (
-        title
-        or "Untitled event"
-    )
+    return title or "Untitled event"
+
 
 def add_calendar_event(text):
 
@@ -2022,13 +2009,34 @@ def build_ai_context(user_input: str, vision=None, file_context=None, history=No
 # =========================================================
 
 
-def generate_ai_response(message: str, vision=None, file_context=None, history=None):
+def generate_ai_response(
+    message: str,
+    vision=None,
+    file_context=None,
+    history=None,
+    model=None,
+):
 
-    prompt = build_ai_context(message, vision, file_context, history)
+    prompt = build_ai_context(
+        message,
+        vision,
+        file_context,
+        history,
+    )
 
-    response = ollama.chat(
-        model="qwen3:1.7b",
-        messages=[
+    if model is None:
+
+        model = select_model(
+            message,
+            route="ai",
+            intent="chat",
+            vision=vision,
+            file_context=file_context,
+        )
+
+    response = model_chat(
+        model,
+        [
             {
                 "role": "system",
                 "content": (
@@ -2040,7 +2048,10 @@ def generate_ai_response(message: str, vision=None, file_context=None, history=N
                     "Do not invent unsupported facts."
                 ),
             },
-            {"role": "user", "content": prompt},
+            {
+                "role": "user",
+                "content": prompt,
+            },
         ],
     )
 
@@ -2052,13 +2063,34 @@ def generate_ai_response(message: str, vision=None, file_context=None, history=N
 # =========================================================
 
 
-def generate_ai_stream(message: str, vision=None, file_context=None, history=None):
+def generate_ai_stream(
+    message: str,
+    vision=None,
+    file_context=None,
+    history=None,
+    model=None,
+):
 
-    prompt = build_ai_context(message, vision, file_context, history)
+    prompt = build_ai_context(
+        message,
+        vision,
+        file_context,
+        history,
+    )
 
-    response = ollama.chat(
-        model="qwen3:1.7b",
-        messages=[
+    if model is None:
+
+        model = select_model(
+            message,
+            route="ai",
+            intent="chat",
+            vision=vision,
+            file_context=file_context,
+        )
+
+    response = model_stream_chat(
+        model,
+        [
             {
                 "role": "system",
                 "content": (
@@ -2073,9 +2105,11 @@ def generate_ai_stream(message: str, vision=None, file_context=None, history=Non
                     "Do not invent unsupported facts."
                 ),
             },
-            {"role": "user", "content": prompt},
+            {
+                "role": "user",
+                "content": prompt,
+            },
         ],
-        stream=True,
     )
 
     for chunk in response:
@@ -2178,6 +2212,88 @@ def assistant(request: ChatRequest):
                 "route": "tool",
                 "intent": "calendar",
                 "response": "I couldn't access the local calendar.",
+                "error": str(error),
+                "memory": memory_result,
+            }
+
+    # =====================================================
+    # WEB SEARCH
+    # =====================================================
+
+    routing = route_input(user_input)
+
+    if routing.get("route") == "tool" and routing.get("intent") == "web_search":
+
+        try:
+
+            search_result = web_search(user_input, max_results=5)
+
+            if not search_result.get("success"):
+                return {
+                    "success": False,
+                    "route": "tool",
+                    "intent": "web_search",
+                    "response": "Web search failed.",
+                    "error": search_result.get("error"),
+                    "memory": memory_result,
+                }
+
+            results = search_result.get("results", [])
+
+            if not results:
+                return {
+                    "success": True,
+                    "route": "tool",
+                    "intent": "web_search",
+                    "response": "I couldn't find any useful search results.",
+                    "results": [],
+                    "memory": memory_result,
+                }
+
+            search_context = "\n\n".join(
+                f"TITLE: {item.get('title', '')}\n"
+                f"URL: {item.get('url', '')}\n"
+                f"SUMMARY: {item.get('snippet', '')}"
+                for item in results
+            )
+
+            prompt = (
+                "Use the following live web search results to answer the user's question.\n\n"
+                "SEARCH RESULTS:\n" + search_context + "\n\n"
+                "USER QUESTION:\n" + user_input + "\n\n"
+                "Rules: Answer using the search results. Do not invent facts. "
+                "Keep the answer clear and useful. Mention important sources when appropriate."
+            )
+
+            response = model_chat(
+                GENERAL_MODEL,
+                [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful local AI assistant. Answer using the supplied web search results. Do not invent information.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            )
+
+            return {
+                "success": True,
+                "route": "tool",
+                "intent": "web_search",
+                "response": response["message"]["content"],
+                "results": results,
+                "memory": memory_result,
+            }
+
+        except Exception as error:
+
+            print("Web search error:", error)
+
+            return {
+                "success": False,
+                "route": "tool",
+                "intent": "web_search",
+                "response": "I couldn't complete the web search.",
                 "error": str(error),
                 "memory": memory_result,
             }
@@ -2436,27 +2552,56 @@ def assistant(request: ChatRequest):
 
     if route == "ai":
 
+        selected_model = select_model(
+            user_input,
+            route="ai",
+            intent=intent,
+            vision=vision,
+            file_context=file_context,
+        )
+
         def event_generator():
 
             try:
 
-                yield stream_event("start", route="ai", intent=intent)
+                yield stream_event(
+                    "start",
+                    route="ai",
+                    intent=intent,
+                    model=selected_model,
+                )
 
                 for chunk in generate_ai_stream(
-                    user_input, vision, file_context, history
+                    user_input,
+                    vision,
+                    file_context,
+                    history,
+                    model=selected_model,
                 ):
 
-                    yield stream_event("chunk", content=chunk)
+                    yield stream_event(
+                        "chunk",
+                        content=chunk,
+                    )
 
-                yield stream_event("done")
+                yield stream_event(
+                    "done",
+                    model=selected_model,
+                )
 
             except Exception as error:
 
                 print("Streaming AI error:", error)
 
-                yield stream_event("error", message=str(error))
+                yield stream_event(
+                    "error",
+                    message=str(error),
+                )
 
-        return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+        return StreamingResponse(
+            event_generator(),
+            media_type="application/x-ndjson",
+        )
 
     # =====================================================
     # VISION ROUTE
@@ -3337,6 +3482,17 @@ def route_only(request: ChatRequest):
         result = {"route": "tool", "intent": "weather"}
 
     # -----------------------------------------------------
+    # WEB SEARCH
+    # -----------------------------------------------------
+
+    elif (
+        route_input(request.message).get("route") == "tool"
+        and route_input(request.message).get("intent") == "web_search"
+    ):
+
+        result = route_input(request.message)
+
+    # -----------------------------------------------------
     # CALENDAR
     # -----------------------------------------------------
 
@@ -3383,3 +3539,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    #

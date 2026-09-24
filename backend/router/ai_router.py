@@ -5,234 +5,113 @@
 import re
 
 
-# =========================================================
-# ROUTE INPUT
-# =========================================================
-
 def route_input(user_input: str):
-
     text = user_input.lower().strip()
 
-    # =====================================================
-    # CALCULATOR
-    # =====================================================
-
     calculator_patterns = [
-        r"\d+\s*[\+\-\*/]\s*\d+",
-        r"calculate",
-        r"what is .*%",
-        r"\d+\s*%\s*of\s*\d+",
-        r"solve .*[+\-\*/]",
-        r"how much is .*[+\-\*/]"
+        r"^\s*\d+(?:\.\d+)?\s*[\+\-\*/%]\s*\d+(?:\.\d+)?\s*$",
+        r"\bcalculate\b",
+        r"\bwhat\s+is\s+\d+.*[\+\-\*/%].*\d+",
+        r"\b\d+\s*%\s*of\s*\d+\b",
+        r"\bsolve\s+\d+.*[\+\-\*/%].*\d+",
+        r"\bhow\s+much\s+is\s+\d+.*[\+\-\*/%].*\d+",
     ]
-
     for pattern in calculator_patterns:
-
         if re.search(pattern, text):
-
-            return {
-                "route": "command",
-                "intent": "calculator"
-            }
-
-    # =====================================================
-    # WEB SEARCH
-    # =====================================================
+            return {"route": "command", "intent": "calculator"}
 
     web_search_patterns = [
-
-        # Explicit search commands
         r"^search\s+",
         r"^search\s+for\s+",
         r"^search\s+the\s+web\s+",
         r"^search\s+online\s+",
         r"^look\s+up\s+",
-
-        # Current/latest information
         r"\blatest\b",
         r"\bcurrent\b",
-        r"\btoday's\b",
+        r"\btoday'?s\b",
         r"\btoday\b",
         r"\brecent\b",
         r"\bnews\b",
-
-        # Internet-related requests
         r"\bon\s+the\s+internet\b",
         r"\bonline\b",
         r"\baccording\s+to\s+the\s+internet\b",
     ]
-
     for pattern in web_search_patterns:
-
         if re.search(pattern, text):
+            return {"route": "tool", "intent": "web_search"}
 
-            return {
-                "route": "tool",
-                "intent": "web_search"
-            }
-
-    # =====================================================
-    # OPEN APPLICATION
-    # =====================================================
-
-    open_patterns = [
-        "open ",
-        "launch ",
-        "start ",
-        "run "
-    ]
-
-    for pattern in open_patterns:
-
+    for pattern in ["open ", "launch ", "start ", "run "]:
         if text.startswith(pattern):
+            return {"route": "command", "intent": "open_app"}
 
-            return {
-                "route": "command",
-                "intent": "open_app"
-            }
-
-    # =====================================================
-    # CLOSE APPLICATION
-    # =====================================================
-
-    close_patterns = [
-        "close ",
-        "stop ",
-        "exit ",
-        "quit "
-    ]
-
-    for pattern in close_patterns:
-
+    for pattern in ["close ", "stop ", "exit ", "quit "]:
         if text.startswith(pattern):
+            return {"route": "command", "intent": "close_app"}
 
-            return {
-                "route": "command",
-                "intent": "close_app"
-            }
-
-    # =====================================================
-    # FACE RECOGNITION
-    # =====================================================
-
-    face_phrases = [
-
-        "who am i",
-        "recognize me",
-        "recognise me",
-        "identify me",
-        "who is this",
-        "identify this person",
-        "recognize this person",
-        "recognise this person"
-
-    ]
-
-    for phrase in face_phrases:
-
+    for phrase in [
+        "who am i", "recognize me", "recognise me", "identify me",
+        "who is this", "identify this person", "recognize this person",
+        "recognise this person",
+    ]:
         if phrase in text:
+            return {"route": "vision", "intent": "face_recognition"}
 
-            return {
-                "route": "vision",
-                "intent": "face_recognition"
-            }
-
-    # =====================================================
-    # OBJECT DETECTION
-    # =====================================================
-
-    vision_phrases = [
-
-        "what am i looking at",
-        "what is in front of me",
-        "what do you see",
-        "what can you see",
-        "identify the objects",
-        "detect objects",
-        "what objects are there",
-        "what is around me"
-
-    ]
-
-    for phrase in vision_phrases:
-
+    for phrase in [
+        "what am i looking at", "what is in front of me", "what do you see",
+        "what can you see", "identify the objects", "detect objects",
+        "what objects are there", "what is around me",
+    ]:
         if phrase in text:
+            return {"route": "vision", "intent": "object_detection"}
 
-            return {
-                "route": "vision",
-                "intent": "object_detection"
-            }
-
-    # =====================================================
-    # DEFAULT → AI
-    # =====================================================
-
-    return {
-        "route": "ai",
-        "intent": "chat"
-    }
+    return {"route": "ai", "intent": "chat"}
 
 
-# =========================================================
-# BACKWARD COMPATIBILITY
-# =========================================================
+def select_model(user_input: str, route: str = "ai", intent: str = "chat", vision=None, file_context: str | None = None):
+    text = user_input.lower().strip()
+
+    if route != "ai":
+        return None
+
+    coding_patterns = [
+        r"\bdebug\b", r"\bdebugging\b", r"\bfix\s+(this|the|my)\s+code\b",
+        r"\bcode\b", r"\bcoding\b", r"\bprogram\b", r"\bprogramming\b",
+        r"\berror\b", r"\bexception\b", r"\bbug\b", r"\bsyntax\b",
+        r"\bcompile\b", r"\bcompiler\b", r"\bfunction\b", r"\bclass\b",
+        r"\bvariable\b", r"\barray\b", r"\bpointer\b", r"\brecursion\b",
+        r"\bpython\b", r"\bc programming\b", r"\blanguage c\b", r"\bc\+\+\b",
+        r"\bcpp\b", r"\bjava\b", r"\bjavascript\b", r"\breact\b",
+        r"\bhtml\b", r"\bcss\b", r"\bfastapi\b", r"\bapi\b", r"\bsql\b",
+    ]
+    if any(re.search(p, text) for p in coding_patterns):
+        return "qwen2.5-coder:3b"
+
+    complex_patterns = [
+        r"\bin\s+detail\b", r"\bdetailed\b", r"\bdetailed\s+explanation\b",
+        r"\bexplain\s+in\s+detail\b", r"\bexplain\s+this\s+in\s+detail\b",
+        r"\bexplain\s+deeply\b", r"\banalyze\b", r"\banalyse\b", r"\bin[-\s]depth\b",
+        r"\bdeeply\b", r"\bstep[-\s]by[-\s]step\b", r"\bprove\b", r"\bderive\b",
+        r"\breason\b", r"\breasoning\b", r"\bcompare\b", r"\bcomparison\b",
+        r"\bpros\s+and\s+cons\b", r"\btrade[-\s]off\b", r"\bwhy\s+does\b",
+        r"\bwhy\s+is\b", r"\bhow\s+does\b", r"\bcomplex\b",
+        r"\bsolve\s+this\s+problem\b",
+    ]
+    if any(re.search(p, text) for p in complex_patterns):
+        return "qwen3:4b"
+
+    simple_patterns = [
+        r"^hi$", r"^hello$", r"^hey$", r"^thanks$", r"^thank\s+you$",
+        r"^good\s+morning$", r"^good\s+afternoon$", r"^good\s+evening$",
+        r"^who\s+are\s+you\??$", r"^what\s+can\s+you\s+do\??$",
+    ]
+    if len(text) <= 30 and any(re.search(p, text) for p in simple_patterns):
+        return "qwen3:0.6b"
+
+    if file_context:
+        return "qwen3:1.7b"
+
+    return "qwen3:1.7b"
+
 
 def route_request(user_input: str):
-
     return route_input(user_input)
-
-
-# =========================================================
-# TEST
-# =========================================================
-
-if __name__ == "__main__":
-
-    test_inputs = [
-
-        "What is 25 * 40?",
-        "Calculate 100 + 50",
-        "What is 15% of 200?",
-
-        "Search for latest Python version",
-        "Search the web for AI news",
-        "Look up Python 3.14",
-        "What is the latest technology news?",
-        "What is the current population of India?",
-
-        "Open Chrome",
-        "Launch calculator",
-
-        "Close Chrome",
-
-        "What is polymorphism?",
-        "Explain machine learning",
-        "Tell me a joke",
-
-        "What am I looking at?",
-        "What is in front of me?",
-
-        "Who am I?",
-        "Recognize me"
-    ]
-
-    print()
-    print("=" * 60)
-    print("AI ROUTER TEST")
-    print("=" * 60)
-
-    for user_input in test_inputs:
-
-        result = route_input(
-            user_input
-        )
-
-        print()
-        print("INPUT :", user_input)
-        print("ROUTE :", result["route"])
-        print("INTENT:", result["intent"])
-
-    print()
-    print("=" * 60)
-    print("TEST COMPLETE")
-    print("=" * 60)
