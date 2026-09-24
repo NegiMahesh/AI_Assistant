@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import ollama
 import os
@@ -189,7 +189,7 @@ class ChatRequest(BaseModel):
 
     file_context: str | None = None
 
-    history: list[ChatMessage] = []
+    history: list[ChatMessage] = Field(default_factory=list)
 
 
 class SpeakRequest(BaseModel):
@@ -2750,23 +2750,21 @@ def chat(request: ChatRequest):
 
             yield stream_event("start", route="ai", intent="chat")
 
-            response = ollama.chat(
-                model="qwen3:1.7b",
-                messages=[
+            response = model_stream_chat(
+                GENERAL_MODEL,
+                [
                     {
                         "role": "system",
                         "content": (
                             "You are a personal AI assistant. "
-                            "Use conversation history to "
-                            "understand follow-up questions. "
-                            "Use memory for personal facts. "
-                            "Use normal knowledge for factual "
+                            "Use conversation history to understand "
+                            "follow-up questions. Use memory for personal "
+                            "facts. Use normal knowledge for factual "
                             "questions. Do not invent facts."
                         ),
                     },
                     {"role": "user", "content": prompt},
                 ],
-                stream=True,
             )
 
             for chunk in response:
@@ -3464,8 +3462,9 @@ Instructions:
 - Give a concise and useful answer.
 """
 
-        response = ollama.chat(
-            model="qwen3:1.7b", messages=[{"role": "user", "content": prompt}]
+        response = model_chat(
+            GENERAL_MODEL,
+            [{"role": "user", "content": prompt}],
         )
 
         ai_response = response["message"]["content"]
@@ -3514,11 +3513,11 @@ def route_only(request: ChatRequest):
     # -----------------------------------------------------
 
     elif (
-        route_input(request.message).get("route") == "tool"
-        and route_input(request.message).get("intent") == "web_search"
+        (routing := route_input(request.message)).get("route") == "tool"
+        and routing.get("intent") == "web_search"
     ):
 
-        result = route_input(request.message)
+        result = routing
 
     # -----------------------------------------------------
     # CALENDAR
