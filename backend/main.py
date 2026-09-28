@@ -1,7 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import ollama
 import os
@@ -74,9 +74,19 @@ app = FastAPI(
 # CORS
 # =========================================================
 
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:4173,http://127.0.0.1:4173",
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -84,36 +94,54 @@ app.add_middleware(
 
 
 # =========================================================
-# YOLO
+# VISION MODELS — LAZY LOADING
 # =========================================================
 
-print("Loading YOLO model...")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(BASE_DIR)
 
-MODEL_PATH = "yolo11n.pt"
-
-model = YOLO(MODEL_PATH)
-
-print("YOLO model loaded!")
+MODEL_PATH = os.path.join(PROJECT_DIR, "yolo11n.pt")
+VISION_MODEL = None
+FACE_APP = None
 
 
-# =========================================================
-# INSIGHTFACE
-# =========================================================
+def get_vision_models():
+    """Load heavy vision models only when vision is actually used."""
+    global VISION_MODEL, FACE_APP
 
-print("Loading InsightFace model...")
+    if VISION_MODEL is None:
+        print("Loading YOLO model...")
+        VISION_MODEL = YOLO(MODEL_PATH)
+        print("YOLO model loaded!")
 
-face_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+    if FACE_APP is None:
+        print("Loading InsightFace model...")
+        try:
+            import onnxruntime as ort
 
-face_app.prepare(ctx_id=0, det_size=(640, 640))
+            providers = ort.get_available_providers()
+            if "CUDAExecutionProvider" in providers:
+                face_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            else:
+                face_providers = ["CPUExecutionProvider"]
+        except Exception:
+            face_providers = ["CPUExecutionProvider"]
 
-print("InsightFace model loaded!")
+        FACE_APP = FaceAnalysis(
+            name="buffalo_l",
+            providers=face_providers,
+        )
+        FACE_APP.prepare(ctx_id=0, det_size=(640, 640))
+        print(f"InsightFace model loaded ({face_providers[0]}).")
+
+    return VISION_MODEL, FACE_APP
 
 
 # =========================================================
 # FACE DATABASE
 # =========================================================
 
-FACE_DATABASE_FILE = "face_database.npz"
+FACE_DATABASE_FILE = os.path.join(BASE_DIR, "face_database.npz")
 
 FACE_DATABASE = {}
 
@@ -161,7 +189,7 @@ class ChatRequest(BaseModel):
 
     file_context: str | None = None
 
-    history: list[ChatMessage] = []
+    history: list[ChatMessage] = Field(default_factory=list)
 
 
 class SpeakRequest(BaseModel):
@@ -291,7 +319,7 @@ def status():
 
     return {
         "assistant": "online",
-        "llm": "qwen3:1.7b",
+        "llm": model_status()["general"],
         "yolo": "yolo11n",
         "face_recognition": "InsightFace",
         "speech_recognition": "enabled",
@@ -2722,23 +2750,21 @@ def chat(request: ChatRequest):
 
             yield stream_event("start", route="ai", intent="chat")
 
-            response = ollama.chat(
-                model="qwen3:1.7b",
-                messages=[
+            response = model_stream_chat(
+                GENERAL_MODEL,
+                [
                     {
                         "role": "system",
                         "content": (
                             "You are a personal AI assistant. "
-                            "Use conversation history to "
-                            "understand follow-up questions. "
-                            "Use memory for personal facts. "
-                            "Use normal knowledge for factual "
+                            "Use conversation history to understand "
+                            "follow-up questions. Use memory for personal "
+                            "facts. Use normal knowledge for factual "
                             "questions. Do not invent facts."
                         ),
                     },
                     {"role": "user", "content": prompt},
                 ],
-                stream=True,
             )
 
             for chunk in response:
@@ -2852,7 +2878,7 @@ async def detect(file: UploadFile = File(...), confidence: float = DEFAULT_CONFI
 
         return {"success": False, "error": "Could not decode image"}
 
-    results = model.predict(
+    vision_model, _ = get_vision_models()\n\n    results = vision_model.predict(
         source=frame,
         conf=confidence,
         imgsz=YOLO_IMAGE_SIZE,
@@ -2874,7 +2900,7 @@ async def detect(file: UploadFile = File(...), confidence: float = DEFAULT_CONFI
 
             class_id = int(box.cls[0].cpu().numpy())
 
-            class_name = model.names[class_id]
+            class_name = vision_model.names[class_id]
 
             detections.append(
                 {
@@ -2923,7 +2949,7 @@ async def detect_faces(file: UploadFile = File(...)):
 
         return {"success": False, "error": "Could not decode image"}
 
-    faces = face_app.get(frame)
+    _, face_app = get_vision_models()\n\n    faces = face_app.get(frame)
 
     detected_faces = []
 
@@ -3436,8 +3462,9 @@ Instructions:
 - Give a concise and useful answer.
 """
 
-        response = ollama.chat(
-            model="qwen3:1.7b", messages=[{"role": "user", "content": prompt}]
+        response = model_chat(
+            GENERAL_MODEL,
+            [{"role": "user", "content": prompt}],
         )
 
         ai_response = response["message"]["content"]
@@ -3486,11 +3513,11 @@ def route_only(request: ChatRequest):
     # -----------------------------------------------------
 
     elif (
-        route_input(request.message).get("route") == "tool"
-        and route_input(request.message).get("intent") == "web_search"
+        (routing := route_input(request.message)).get("route") == "tool"
+        and routing.get("intent") == "web_search"
     ):
 
-        result = route_input(request.message)
+        result = routing
 
     # -----------------------------------------------------
     # CALENDAR
