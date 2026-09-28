@@ -2878,7 +2878,9 @@ async def detect(file: UploadFile = File(...), confidence: float = DEFAULT_CONFI
 
         return {"success": False, "error": "Could not decode image"}
 
-    vision_model, _ = get_vision_models()\n\n    results = vision_model.predict(
+    vision_model, _ = get_vision_models()
+
+    results = vision_model.predict(
         source=frame,
         conf=confidence,
         imgsz=YOLO_IMAGE_SIZE,
@@ -2949,7 +2951,9 @@ async def detect_faces(file: UploadFile = File(...)):
 
         return {"success": False, "error": "Could not decode image"}
 
-    _, face_app = get_vision_models()\n\n    faces = face_app.get(frame)
+    _, face_app = get_vision_models()
+
+    faces = face_app.get(frame)
 
     detected_faces = []
 
