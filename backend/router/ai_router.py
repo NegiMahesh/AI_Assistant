@@ -86,8 +86,6 @@ COMPLEX_PATTERNS = (
     r"\b(?:compare|comparison)\b",
     r"\bpros\s+and\s+cons\b",
     r"\btrade[-\s]off\b",
-    r"\bwhy\s+(?:does|is|are)\b",
-    r"\bhow\s+does\b",
     r"\bcomplex\b",
     r"\bsolve\s+this\s+problem\b",
 )
