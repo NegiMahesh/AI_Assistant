@@ -148,8 +148,66 @@ def route_input(user_input: str):
     if any(phrase in text for phrase in OBJECT_PATTERNS):
         return _route("vision", "object_detection", "object_detection_pattern")
 
-    # 5. Everything else goes to model selection.
-    return _route("ai", "chat", "default_ai_route")
+    # 5. Classify AI requests before model selection.
+    intent = detect_ai_intent(text)
+
+    return _route("ai", intent, f"intent_{intent}")
+
+
+# ---------------------------------------------------------
+# PHASE 19.2 — INTENT DETECTION
+# ---------------------------------------------------------
+# Intent detection happens after deterministic tool routing.
+# This keeps tool/action requests out of the LLM path while
+# giving normal AI requests a more precise intent before model
+# selection.
+# ---------------------------------------------------------
+
+SIMPLE_QUESTION_PATTERNS = (
+    r"^whats+is",
+    r"^whats+are",
+    r"^whats+does",
+    r"^define",
+    r"^definitions+of",
+    r"^meanings+of",
+    r"^whos+is",
+    r"^wheres+is",
+    r"^whens+is",
+    r"^hows+many",
+    r"^hows+much",
+    r"^cans+yous+(?:tell|explain)s+mes+",
+)
+
+QUESTION_START_PATTERNS = (
+    r"^(?:what|who|where|when|which|how|why|can|could|would|should|is|are|do|does|did)\\b",
+)
+
+
+def detect_ai_intent(text: str) -> str:
+    """Classify an AI request without calling an LLM."""
+
+    text = str(text or "").lower().strip()
+
+    if not text:
+        return "chat"
+
+    # More specific intents must win over broad question patterns.
+    if _matches(text, CODING_PATTERNS):
+        return "coding"
+
+    if _matches(text, COMPLEX_PATTERNS):
+        return "complex_reasoning"
+
+    if _matches(text, FAST_PATTERNS):
+        return "greeting"
+
+    if _matches(text, SIMPLE_QUESTION_PATTERNS) and len(text) <= 100:
+        return "simple_question"
+
+    if "?" in text or _matches(text, QUESTION_START_PATTERNS):
+        return "normal_question"
+
+    return "chat"
 
 
 # ---------------------------------------------------------
@@ -168,24 +226,37 @@ def select_model(
     if route != "ai":
         return None
 
-    # Coding takes priority over generic "how/why" patterns.
-    # Example: "why is this Python code failing?"
-    if _matches(text, CODING_PATTERNS):
+    # Phase 19.2 intent is the primary model-selection signal.
+    # Keep pattern checks as a safety fallback for callers that
+    # provide an intent value from an older router.
+    if intent == "coding":
         return CODING_MODEL
 
-    # Explicitly demanding deeper reasoning uses the complex model.
-    if _matches(text, COMPLEX_PATTERNS):
+    if intent == "complex_reasoning":
         return COMPLEX_MODEL
 
-    # Very short conversational requests are cheap enough for the
-    # smallest model.
-    if len(text) <= 30 and _matches(text, FAST_PATTERNS):
+    if intent == "greeting":
+        return FAST_MODEL
+
+    if intent == "simple_question":
         return FAST_MODEL
 
     # File context needs enough capacity to understand the supplied
     # document, but does not automatically require the 4B model.
     if file_context:
         return GENERAL_MODEL
+
+    if intent == "normal_question":
+        return GENERAL_MODEL
+
+    if _matches(text, CODING_PATTERNS):
+        return CODING_MODEL
+
+    if _matches(text, COMPLEX_PATTERNS):
+        return COMPLEX_MODEL
+
+    if len(text) <= 30 and _matches(text, FAST_PATTERNS):
+        return FAST_MODEL
 
     return GENERAL_MODEL
 
