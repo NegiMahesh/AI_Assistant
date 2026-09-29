@@ -208,9 +208,23 @@ def detect_ai_intent(text: str) -> str:
     return "chat"
 
 
-# ---------------------------------------------------------
-# PHASE 19.2 PREPARATION — MODEL SELECTION
-# ---------------------------------------------------------
+# =========================================================
+# PHASE 19.3 — INTELLIGENT MODEL SELECTION
+# =========================================================
+# Select the smallest suitable model for the detected intent.
+# The goal is to preserve response quality while avoiding
+# unnecessary calls to the larger models.
+# =========================================================
+
+INTENT_MODEL_MAP = {
+    "greeting": FAST_MODEL,
+    "simple_question": FAST_MODEL,
+    "normal_question": GENERAL_MODEL,
+    "chat": GENERAL_MODEL,
+    "complex_reasoning": COMPLEX_MODEL,
+    "coding": CODING_MODEL,
+}
+
 
 def select_model(
     user_input: str,
@@ -224,42 +238,40 @@ def select_model(
     if route != "ai":
         return None
 
-    # Phase 19.2 intent is the primary model-selection signal.
     # Older callers may still pass the default "chat" intent.
-    # Re-detect it here so the new classifier is actually used.
+    # Re-detect it so Phase 19.2 directly feeds Phase 19.3.
     if intent == "chat":
         intent = detect_ai_intent(text)
 
+    # Protect model selection from invalid/unknown intent values.
+    if intent not in INTENT_MODEL_MAP:
+        intent = detect_ai_intent(text)
+
+    # Explicit coding intent always uses the coding-specialized model.
+    # This also takes priority when a code-related file is attached.
     if intent == "coding":
         return CODING_MODEL
 
+    # Explicit complex reasoning gets the larger reasoning model.
+    # File context does not automatically upgrade it further.
     if intent == "complex_reasoning":
         return COMPLEX_MODEL
 
-    if intent == "greeting":
-        return FAST_MODEL
-
-    if intent == "simple_question":
-        return FAST_MODEL
-
-    # File context needs enough capacity to understand the supplied
-    # document, but does not automatically require the 4B model.
+    # A file needs more context capacity than the fast model, but
+    # ordinary file questions do not automatically need the 4B model.
     if file_context:
         return GENERAL_MODEL
 
-    if intent == "normal_question":
-        return GENERAL_MODEL
+    # Use the centralized intent map for the remaining AI requests.
+    selected_model = INTENT_MODEL_MAP.get(intent, GENERAL_MODEL)
 
-    if _matches(text, CODING_PATTERNS):
-        return CODING_MODEL
+    # Safety fallback for short conversational messages that were
+    # not recognized by the classifier.
+    if selected_model == GENERAL_MODEL and len(text) <= 30:
+        if _matches(text, FAST_PATTERNS):
+            return FAST_MODEL
 
-    if _matches(text, COMPLEX_PATTERNS):
-        return COMPLEX_MODEL
-
-    if len(text) <= 30 and _matches(text, FAST_PATTERNS):
-        return FAST_MODEL
-
-    return GENERAL_MODEL
+    return selected_model
 
 
 def route_request(user_input: str):
