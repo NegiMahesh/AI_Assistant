@@ -105,14 +105,25 @@ VISION_MODEL = None
 FACE_APP = None
 
 
-def get_vision_models():
-    """Load heavy vision models only when vision is actually used."""
-    global VISION_MODEL, FACE_APP
+def get_yolo_model():
+    """Load YOLO only when object detection is actually requested."""
+    global VISION_MODEL
 
     if VISION_MODEL is None:
         print("Loading YOLO model...")
+        if not os.path.exists(MODEL_PATH):
+            raise FileNotFoundError(
+                f"YOLO model not found: {MODEL_PATH}"
+            )
         VISION_MODEL = YOLO(MODEL_PATH)
         print("YOLO model loaded!")
+
+    return VISION_MODEL
+
+
+def get_face_app():
+    """Load InsightFace only when face recognition is actually requested."""
+    global FACE_APP
 
     if FACE_APP is None:
         print("Loading InsightFace model...")
@@ -120,10 +131,11 @@ def get_vision_models():
             import onnxruntime as ort
 
             providers = ort.get_available_providers()
-            if "CUDAExecutionProvider" in providers:
-                face_providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-            else:
-                face_providers = ["CPUExecutionProvider"]
+            face_providers = (
+                ["CPUExecutionProvider"]
+                if "CPUExecutionProvider" in providers
+                else providers
+            )
         except Exception:
             face_providers = ["CPUExecutionProvider"]
 
@@ -134,7 +146,7 @@ def get_vision_models():
         FACE_APP.prepare(ctx_id=0, det_size=(640, 640))
         print(f"InsightFace model loaded ({face_providers[0]}).")
 
-    return VISION_MODEL, FACE_APP
+    return FACE_APP
 
 
 # =========================================================
@@ -2878,7 +2890,7 @@ async def detect(file: UploadFile = File(...), confidence: float = DEFAULT_CONFI
 
         return {"success": False, "error": "Could not decode image"}
 
-    vision_model, _ = get_vision_models()
+    vision_model = get_yolo_model()
 
     results = vision_model.predict(
         source=frame,
@@ -2951,7 +2963,7 @@ async def detect_faces(file: UploadFile = File(...)):
 
         return {"success": False, "error": "Could not decode image"}
 
-    _, face_app = get_vision_models()
+    face_app = get_face_app()
 
     faces = face_app.get(frame)
 
@@ -3057,6 +3069,8 @@ async def enroll_face(name: str, file: UploadFile = File(...)):
 
         return {"success": False, "error": "Could not decode image"}
 
+    face_app = get_face_app()
+
     faces = face_app.get(frame)
 
     if len(faces) == 0:
@@ -3105,6 +3119,8 @@ async def recognize_faces(file: UploadFile = File(...)):
     if frame is None:
 
         return {"success": False, "error": "Could not decode image"}
+
+    face_app = get_face_app()
 
     faces = face_app.get(frame)
 
