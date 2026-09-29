@@ -227,8 +227,11 @@ def select_model(
         return None
 
     # Phase 19.2 intent is the primary model-selection signal.
-    # Keep pattern checks as a safety fallback for callers that
-    # provide an intent value from an older router.
+    # Older callers may still pass the default "chat" intent.
+    # Re-detect it here so the new classifier is actually used.
+    if intent == "chat":
+        intent = detect_ai_intent(text)
+
     if intent == "coding":
         return CODING_MODEL
 
