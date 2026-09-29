@@ -181,31 +181,58 @@ QUESTION_START_PATTERNS = (
 )
 
 
-def detect_ai_intent(text: str) -> str:
-    """Classify an AI request without calling an LLM."""
+# =========================================================
+# PHASE 19.4 — CONFIDENCE & FALLBACK ROUTING
+# =========================================================
+# Keep intent detection deterministic, but attach a confidence
+# estimate so uncertain classifications can safely fall back
+# to the general model instead of forcing a specialized model.
+# =========================================================
+
+INTENT_CONFIDENCE = {
+    "greeting": 0.99,
+    "simple_question": 0.95,
+    "coding": 0.92,
+    "complex_reasoning": 0.90,
+    "normal_question": 0.80,
+    "chat": 0.60,
+}
+
+FALLBACK_CONFIDENCE_THRESHOLD = 0.70
+
+
+def detect_ai_intent_with_confidence(text: str) -> tuple[str, float]:
+    """Classify an AI request and return (intent, confidence)."""
 
     text = str(text or "").lower().strip()
 
     if not text:
-        return "chat"
+        return "chat", 0.0
 
     # More specific intents must win over broad question patterns.
     if _matches(text, CODING_PATTERNS):
-        return "coding"
+        return "coding", INTENT_CONFIDENCE["coding"]
 
     if _matches(text, COMPLEX_PATTERNS):
-        return "complex_reasoning"
+        return "complex_reasoning", INTENT_CONFIDENCE["complex_reasoning"]
 
     if _matches(text, FAST_PATTERNS):
-        return "greeting"
+        return "greeting", INTENT_CONFIDENCE["greeting"]
 
     if _matches(text, SIMPLE_QUESTION_PATTERNS) and len(text) <= 100:
-        return "simple_question"
+        return "simple_question", INTENT_CONFIDENCE["simple_question"]
 
     if "?" in text or _matches(text, QUESTION_START_PATTERNS):
-        return "normal_question"
+        return "normal_question", INTENT_CONFIDENCE["normal_question"]
 
-    return "chat"
+    return "chat", INTENT_CONFIDENCE["chat"]
+
+
+def detect_ai_intent(text: str) -> str:
+    """Compatibility wrapper that returns only the detected intent."""
+
+    intent, _ = detect_ai_intent_with_confidence(text)
+    return intent
 
 
 # =========================================================
@@ -240,12 +267,20 @@ def select_model(
 
     # Older callers may still pass the default "chat" intent.
     # Re-detect it so Phase 19.2 directly feeds Phase 19.3.
+    confidence = INTENT_CONFIDENCE.get(intent, 0.0)
+
     if intent == "chat":
-        intent = detect_ai_intent(text)
+        intent, confidence = detect_ai_intent_with_confidence(text)
 
     # Protect model selection from invalid/unknown intent values.
     if intent not in INTENT_MODEL_MAP:
-        intent = detect_ai_intent(text)
+        intent, confidence = detect_ai_intent_with_confidence(text)
+
+    # Low-confidence classifications use the safe general model.
+    # This prevents uncertain requests from being sent to a
+    # specialized small model.
+    if confidence < FALLBACK_CONFIDENCE_THRESHOLD:
+        return GENERAL_MODEL
 
     # Explicit coding intent always uses the coding-specialized model.
     # This also takes priority when a code-related file is attached.
