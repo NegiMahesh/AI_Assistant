@@ -2897,6 +2897,7 @@ async def detect(file: UploadFile = File(...), confidence: float = DEFAULT_CONFI
         conf=confidence,
         imgsz=YOLO_IMAGE_SIZE,
         max_det=MAX_DETECTIONS,
+        device="cpu",
         verbose=False,
     )
 
