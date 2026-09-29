@@ -164,22 +164,22 @@ def route_input(user_input: str):
 # ---------------------------------------------------------
 
 SIMPLE_QUESTION_PATTERNS = (
-    r"^whats+is",
-    r"^whats+are",
-    r"^whats+does",
-    r"^define",
-    r"^definitions+of",
-    r"^meanings+of",
-    r"^whos+is",
-    r"^wheres+is",
-    r"^whens+is",
-    r"^hows+many",
-    r"^hows+much",
-    r"^cans+yous+(?:tell|explain)s+mes+",
+    r"^what\s+is\b",
+    r"^what\s+are\b",
+    r"^what\s+does\b",
+    r"^define\b",
+    r"^definition\s+of\b",
+    r"^meaning\s+of\b",
+    r"^who\s+is\b",
+    r"^where\s+is\b",
+    r"^when\s+is\b",
+    r"^how\s+many\b",
+    r"^how\s+much\b",
+    r"^can\s+you\s+(?:tell|explain)\s+me\s+",
 )
 
 QUESTION_START_PATTERNS = (
-    r"^(?:what|who|where|when|which|how|why|can|could|would|should|is|are|do|does|did)\\b",
+    r"^(?:what|who|where|when|which|how|why|can|could|would|should|is|are|do|does|did)\b",
 )
 
 
