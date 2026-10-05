@@ -90,6 +90,24 @@ COMPLEX_PATTERNS = (
     r"\bsolve\s+this\s+problem\b",
 )
 
+# Strong signals justify the larger reasoning model. A weak signal such
+# as the single word "complex" should not trigger a large-model call.
+COMPLEX_STRONG_PATTERNS = (
+    r"\bin\s+detail\b",
+    r"\bdetailed\b",
+    r"\bexplain\s+(?:this\s+)?in\s+detail\b",
+    r"\bexplain\s+deeply\b",
+    r"\banaly[sz]e\b",
+    r"\bin[-\s]depth\b",
+    r"\bdeeply\b",
+    r"\bstep[-\s]by[-\s]step\b",
+    r"\b(?:prove|derive|reason|reasoning)\b",
+    r"\b(?:compare|comparison)\b",
+    r"\bpros\s+and\s+cons\b",
+    r"\btrade[-\s]off\b",
+    r"\bsolve\s+this\s+problem\b",
+)
+
 FAST_PATTERNS = (
     r"^hi[!.]?$",
     r"^hello[!.]?$",
@@ -290,7 +308,13 @@ def select_model(
     # Explicit complex reasoning gets the larger reasoning model.
     # File context does not automatically upgrade it further.
     if intent == "complex_reasoning":
-        return COMPLEX_MODEL
+        # Phase 19.5: avoid large-model calls for weak, short matches.
+        # Strong reasoning requests still use the complex model.
+        if _matches(text, COMPLEX_STRONG_PATTERNS):
+            return COMPLEX_MODEL
+        if len(text) >= 120:
+            return COMPLEX_MODEL
+        return GENERAL_MODEL
 
     # A file needs more context capacity than the fast model, but
     # ordinary file questions do not automatically need the 4B model.
