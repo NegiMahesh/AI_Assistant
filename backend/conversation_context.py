@@ -59,14 +59,17 @@ def _trim_message(content: str, max_chars: int) -> str:
     if len(content) <= max_chars:
         return content
 
-    tail_chars = min(280, max_chars // 4)
-    head_chars = max_chars - tail_chars
+    marker = "\n...[message truncated]...\n"
+    available = max(0, max_chars - len(marker))
+
+    tail_chars = min(280, available // 4)
+    head_chars = max(0, available - tail_chars)
 
     return (
         content[:head_chars].rstrip()
-        + "\n...[message truncated]...\n"
+        + marker
         + content[-tail_chars:].lstrip()
-    )
+    )[:max_chars]
 
 
 def normalize_history(history: list[Any] | None) -> list[dict[str, str]]:
