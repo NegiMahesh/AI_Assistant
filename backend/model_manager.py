@@ -59,11 +59,25 @@ MODEL_MAX_TOKENS = {
 }
 
 
-def get_model_options(model_name: str) -> dict:
-    return {
+def get_model_options(
+    model_name: str,
+    overrides: dict | None = None,
+) -> dict:
+    options = {
         "num_ctx": MODEL_CONTEXT.get(model_name, DEFAULT_NUM_CTX),
         "num_predict": MODEL_MAX_TOKENS.get(model_name),
     }
+
+    if overrides:
+        options.update(
+            {
+                key: value
+                for key, value in overrides.items()
+                if value is not None
+            }
+        )
+
+    return options
 
 
 THINK_MODE = os.getenv("OLLAMA_THINK_MODE", "auto").lower().strip()
@@ -201,14 +215,18 @@ def get_keep_alive(model_name: str) -> str:
     return KEEP_ALIVE
 
 
-def chat(model_name: str, messages: Iterable[dict]):
+def chat(
+    model_name: str,
+    messages: Iterable[dict],
+    options_override: dict | None = None,
+):
     prepare_model(model_name)
 
     kwargs = {
         "model": model_name,
         "messages": list(messages),
         "keep_alive": get_keep_alive(model_name),
-        "options": get_model_options(model_name),
+        "options": get_model_options(model_name, options_override),
     }
 
     think = get_think(model_name)
@@ -218,7 +236,11 @@ def chat(model_name: str, messages: Iterable[dict]):
     return ollama.chat(**kwargs)
 
 
-def stream_chat(model_name: str, messages: Iterable[dict]):
+def stream_chat(
+    model_name: str,
+    messages: Iterable[dict],
+    options_override: dict | None = None,
+):
     prepare_model(model_name)
 
     started = time.perf_counter()
@@ -246,7 +268,7 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
             "messages": list(messages),
             "stream": True,
             "keep_alive": get_keep_alive(model_name),
-            "options": get_model_options(model_name),
+            "options": get_model_options(model_name, options_override),
         }
 
         think = get_think(model_name)
