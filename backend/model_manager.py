@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Iterable
 
 import ollama
@@ -29,6 +30,20 @@ MODEL_OPTIONS = {
 # while avoiding an expensive reload on every model switch.
 KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "60s")
 ACTIVE_MODEL: str | None = None
+MODEL_SWITCH_COUNT = 0
+
+LAST_PERFORMANCE = {
+    "model": None,
+    "first_token_ms": None,
+    "total_ms": None,
+    "load_duration_ms": None,
+    "prompt_eval_duration_ms": None,
+    "eval_duration_ms": None,
+    "prompt_tokens": None,
+    "generated_tokens": None,
+    "tokens_per_second": None,
+    "error": None,
+}
 
 
 def unload_model(model_name: str) -> None:
@@ -47,11 +62,12 @@ def unload_model(model_name: str) -> None:
 
 def prepare_model(model_name: str) -> None:
     """Mark a model active without forcing the previous model out of memory."""
-    global ACTIVE_MODEL
+    global ACTIVE_MODEL, MODEL_SWITCH_COUNT
 
     if ACTIVE_MODEL != model_name:
         print(f"Ollama active model: {model_name}")
         ACTIVE_MODEL = model_name
+        MODEL_SWITCH_COUNT += 1
 
 
 def get_keep_alive(model_name: str) -> str:
@@ -72,16 +88,96 @@ def chat(model_name: str, messages: Iterable[dict]):
 def stream_chat(model_name: str, messages: Iterable[dict]):
     prepare_model(model_name)
 
-    response = ollama.chat(
-        model=model_name,
-        messages=list(messages),
-        stream=True,
-        keep_alive=get_keep_alive(model_name),
-        options=MODEL_OPTIONS,
+    started = time.perf_counter()
+    first_token_at = None
+
+    LAST_PERFORMANCE.update(
+        {
+            "model": model_name,
+            "first_token_ms": None,
+            "total_ms": None,
+            "load_duration_ms": None,
+            "prompt_eval_duration_ms": None,
+            "eval_duration_ms": None,
+            "prompt_tokens": None,
+            "generated_tokens": None,
+            "tokens_per_second": None,
+            "error": None,
+        }
     )
 
-    for chunk in response:
-        yield chunk
+    try:
+        response = ollama.chat(
+            model=model_name,
+            messages=list(messages),
+            stream=True,
+            keep_alive=get_keep_alive(model_name),
+            options=MODEL_OPTIONS,
+        )
+
+        for chunk in response:
+            try:
+                content = chunk.get("message", {}).get("content", "")
+            except AttributeError:
+                content = ""
+
+            if content and first_token_at is None:
+                first_token_at = time.perf_counter()
+                LAST_PERFORMANCE["first_token_ms"] = round(
+                    (first_token_at - started) * 1000, 2
+                )
+
+            yield chunk
+
+        finished = time.perf_counter()
+        LAST_PERFORMANCE["total_ms"] = round(
+            (finished - started) * 1000, 2
+        )
+
+        load_duration = chunk.get("load_duration")
+        prompt_eval_duration = chunk.get("prompt_eval_duration")
+        eval_duration = chunk.get("eval_duration")
+        prompt_tokens = chunk.get("prompt_eval_count")
+        generated_tokens = chunk.get("eval_count")
+
+        if load_duration is not None:
+            LAST_PERFORMANCE["load_duration_ms"] = round(
+                load_duration / 1_000_000, 2
+            )
+        if prompt_eval_duration is not None:
+            LAST_PERFORMANCE["prompt_eval_duration_ms"] = round(
+                prompt_eval_duration / 1_000_000, 2
+            )
+        if eval_duration is not None:
+            LAST_PERFORMANCE["eval_duration_ms"] = round(
+                eval_duration / 1_000_000, 2
+            )
+        if prompt_tokens is not None:
+            LAST_PERFORMANCE["prompt_tokens"] = prompt_tokens
+        if generated_tokens is not None:
+            LAST_PERFORMANCE["generated_tokens"] = generated_tokens
+
+        if eval_duration and generated_tokens:
+            LAST_PERFORMANCE["tokens_per_second"] = round(
+                generated_tokens / (eval_duration / 1_000_000_000), 2
+            )
+
+    except Exception as error:
+        LAST_PERFORMANCE["error"] = str(error)
+        LAST_PERFORMANCE["total_ms"] = round(
+            (time.perf_counter() - started) * 1000, 2
+        )
+        raise
+
+
+def performance_status():
+    return {
+        **LAST_PERFORMANCE,
+        "active_model": ACTIVE_MODEL,
+        "model_switch_count": MODEL_SWITCH_COUNT,
+        "keep_alive": KEEP_ALIVE,
+        "model_options": MODEL_OPTIONS,
+    }
 
 
 def model_status():
