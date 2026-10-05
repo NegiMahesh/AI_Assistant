@@ -119,6 +119,12 @@ def main() -> None:
             print(f"  Response chars   : {metrics['response_chars']}")
             print(f"  Model switches   : {metrics['model_switch_count']}")
             print(f"  Think mode       : {metrics.get('model_think')}")
+            print(f"  Large evictions  : {metrics.get('large_model_eviction_count')}")
+            print("  Loaded models    :")
+            for loaded in metrics.get("loaded_models", []):
+                print(f"    - {loaded.get('model')} "
+                      f"(size={loaded.get('size')}, "
+                      f"ctx={loaded.get('context_length')})")
             print()
 
     print("Keep-alive:", performance_status()["keep_alive"])
