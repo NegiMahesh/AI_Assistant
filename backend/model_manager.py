@@ -50,9 +50,19 @@ MODEL_CONTEXT = {
 }
 
 
+MODEL_MAX_TOKENS = {
+    FAST_MODEL: _env_int("FAST_NUM_PREDICT", default=192),
+    GENERAL_MODEL: _env_int("GENERAL_NUM_PREDICT", default=384),
+    COMPLEX_MODEL: _env_int("COMPLEX_NUM_PREDICT", default=768),
+    CODING_MODEL: _env_int("CODING_NUM_PREDICT", default=512),
+    VISION_MODEL: _env_int("VISION_NUM_PREDICT", default=512),
+}
+
+
 def get_model_options(model_name: str) -> dict:
     return {
         "num_ctx": MODEL_CONTEXT.get(model_name, DEFAULT_NUM_CTX),
+        "num_predict": MODEL_MAX_TOKENS.get(model_name),
     }
 
 
@@ -318,6 +328,7 @@ def performance_status():
         if LAST_PERFORMANCE["model"] else get_model_options(GENERAL_MODEL),
         "model_context": MODEL_CONTEXT,
         "default_num_ctx": DEFAULT_NUM_CTX,
+        "model_max_tokens": MODEL_MAX_TOKENS,
         "think_mode": THINK_MODE,
         "chat_supports_think": CHAT_SUPPORTS_THINK,
         "model_think": get_think(LAST_PERFORMANCE["model"])
@@ -342,6 +353,7 @@ def model_status():
         if ACTIVE_MODEL else get_model_options(GENERAL_MODEL),
         "model_context": MODEL_CONTEXT,
         "default_num_ctx": DEFAULT_NUM_CTX,
+        "model_max_tokens": MODEL_MAX_TOKENS,
         "keep_alive": KEEP_ALIVE,
         "large_models": sorted(LARGE_MODELS),
         "max_large_resident": MAX_LARGE_RESIDENT,
