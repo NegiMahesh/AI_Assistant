@@ -363,16 +363,19 @@ def status():
         "router": "enabled",
         "weather": "enabled (Open-Meteo + forecasts)",
         "calendar": "enabled (local events.json)",
-        "memory": "Phase 13C intelligent memory",
+        "memory": "Phase 21 intelligent memory + Phase 13C SQLite",
         "memory_count": get_memory_count(),
         "saved_faces": len(FACE_DATABASE),
         "file_reader": "enabled",
         "supported_files": list(SUPPORTED_FILE_EXTENSIONS),
-        "conversation_history": "enabled",
+        "conversation_history": "Phase 21 compact context",
         "context_aware_tools": "enabled",
         "streaming": "enabled",
         "command_actions": "enabled",
         "max_history_messages": MAX_HISTORY_MESSAGES,
+        "prompt_history_messages": MAX_PROMPT_HISTORY_MESSAGES,
+        "prompt_history_chars": MAX_PROMPT_HISTORY_CHARS,
+        "prompt_message_chars": MAX_PROMPT_MESSAGE_CHARS,
     }
 
 
