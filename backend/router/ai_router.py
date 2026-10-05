@@ -67,10 +67,21 @@ OBJECT_PATTERNS = (
 CODING_PATTERNS = (
     r"\bdebug(?:ging)?\b",
     r"\bfix\s+(?:this|the|my)\s+code\b",
+    r"\b(?:write|show|give|generate|create)\s+(?:me\s+)?(?:some\s+)?code\b",
     r"\b(?:code|coding|program|programming)\b",
     r"\b(?:error|exception|bug|syntax|compile|compiler)\b",
-    r"\b(?:function|class|variable|array|pointer|recursion)\b",
     r"\b(?:python|c programming|language c|c\+\+|cpp|java|javascript|react|html|css|fastapi|api|sql)\b",
+)
+
+# Strong coding signals are used for compound requests. A technical word
+# such as "pointer" or "array" alone is not enough to force the slower
+# coding model.
+STRONG_CODING_PATTERNS = (
+    r"\bdebug(?:ging)?\b",
+    r"\bfix\s+(?:this|the|my)\s+code\b",
+    r"\b(?:write|show|give|generate|create)\s+(?:me\s+)?(?:some\s+)?code\b",
+    r"\b(?:python|c programming|c\+\+|cpp|java|javascript|react|html|css|fastapi|sql)\b",
+    r"\b(?:error|exception|bug|syntax|compile|compiler)\b",
 )
 
 COMPLEX_PATTERNS = (
@@ -353,12 +364,16 @@ def select_model(
         intent = intents[0]
         confidence = INTENT_CONFIDENCE.get(intent, 0.0)
 
-        # Compound AI requests should be handled by the strongest
-        # required model rather than the smallest matching model.
+        # Compound AI requests should use the strongest model only
+        # when there is a strong signal that it is actually required.
+        # This prevents ordinary mixed questions from unnecessarily
+        # loading the 3B/4B models on CPU-only systems.
         if len(intents) > 1:
-            if "coding" in intents:
+            if "coding" in intents and _matches(text, STRONG_CODING_PATTERNS):
                 return CODING_MODEL
-            if "complex_reasoning" in intents:
+            if "complex_reasoning" in intents and _matches(
+                text, COMPLEX_STRONG_PATTERNS
+            ):
                 return COMPLEX_MODEL
             if "normal_question" in intents:
                 return GENERAL_MODEL
