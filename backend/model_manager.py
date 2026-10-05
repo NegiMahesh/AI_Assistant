@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import time
 from typing import Iterable
@@ -25,6 +26,22 @@ ALL_MODELS = [
 MODEL_OPTIONS = {
     "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", "4096")),
 }
+
+THINK_MODE = os.getenv("OLLAMA_THINK_MODE", "auto").lower().strip()
+MODEL_THINK = {
+    FAST_MODEL: False,
+    GENERAL_MODEL: False,
+    COMPLEX_MODEL: True,
+}
+CHAT_SUPPORTS_THINK = "think" in inspect.signature(ollama.chat).parameters
+
+
+def get_think(model_name: str):
+    if THINK_MODE in {"true", "on", "1"}:
+        return True
+    if THINK_MODE in {"false", "off", "0"}:
+        return False
+    return MODEL_THINK.get(model_name)
 
 # Keep models warm briefly. Ollama can evict models when memory is needed,
 # while avoiding an expensive reload on every model switch.
@@ -77,12 +94,18 @@ def get_keep_alive(model_name: str) -> str:
 def chat(model_name: str, messages: Iterable[dict]):
     prepare_model(model_name)
 
-    return ollama.chat(
-        model=model_name,
-        messages=list(messages),
-        keep_alive=get_keep_alive(model_name),
-        options=MODEL_OPTIONS,
-    )
+    kwargs = {
+        "model": model_name,
+        "messages": list(messages),
+        "keep_alive": get_keep_alive(model_name),
+        "options": MODEL_OPTIONS,
+    }
+
+    think = get_think(model_name)
+    if CHAT_SUPPORTS_THINK and think is not None:
+        kwargs["think"] = think
+
+    return ollama.chat(**kwargs)
 
 
 def stream_chat(model_name: str, messages: Iterable[dict]):
@@ -108,13 +131,19 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
     )
 
     try:
-        response = ollama.chat(
-            model=model_name,
-            messages=list(messages),
-            stream=True,
-            keep_alive=get_keep_alive(model_name),
-            options=MODEL_OPTIONS,
-        )
+        kwargs = {
+            "model": model_name,
+            "messages": list(messages),
+            "stream": True,
+            "keep_alive": get_keep_alive(model_name),
+            "options": MODEL_OPTIONS,
+        }
+
+        think = get_think(model_name)
+        if CHAT_SUPPORTS_THINK and think is not None:
+            kwargs["think"] = think
+
+        response = ollama.chat(**kwargs)
 
         for chunk in response:
             final_chunk = chunk
@@ -186,6 +215,10 @@ def performance_status():
         "model_switch_count": MODEL_SWITCH_COUNT,
         "keep_alive": KEEP_ALIVE,
         "model_options": MODEL_OPTIONS,
+        "think_mode": THINK_MODE,
+        "chat_supports_think": CHAT_SUPPORTS_THINK,
+        "model_think": get_think(LAST_PERFORMANCE["model"])
+        if LAST_PERFORMANCE["model"] else None,
     }
 
 
