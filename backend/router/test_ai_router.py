@@ -185,6 +185,43 @@ class TestPhase197Routing(unittest.TestCase):
         )
 
     # -----------------------------------------------------
+    # Phase 19.8 — End-to-end integration
+    # -----------------------------------------------------
+
+    def test_real_assistant_flow_uses_multi_intent_selection(self):
+        cases = {
+            "Hello, can you explain what a pointer is?": GENERAL_MODEL,
+            "Can you explain this Python error and tell me how to fix it?": CODING_MODEL,
+            "Can you explain RISC vs CISC in detail and compare their advantages?": COMPLEX_MODEL,
+        }
+
+        for text, expected_model in cases.items():
+            routing = route_input(text)
+            self.assertEqual(routing["route"], "ai", text)
+
+            selected = select_model(
+                text,
+                route=routing["route"],
+                intent=routing["intent"],
+            )
+
+            self.assertEqual(selected, expected_model, text)
+
+    def test_integration_non_ai_routes_skip_model(self):
+        cases = (
+            ("calculate 25 + 15", "command", "calculator"),
+            ("search for the latest Python news", "tool", "web_search"),
+            ("open chrome", "command", "open_app"),
+            ("who am i", "vision", "face_recognition"),
+        )
+
+        for text, route, intent in cases:
+            routing = route_input(text)
+            self.assertEqual(routing["route"], route, text)
+            self.assertEqual(routing["intent"], intent, text)
+            self.assertIsNone(select_model(text, route=route, intent=intent))
+
+    # -----------------------------------------------------
     # Multi-intent detection
     # -----------------------------------------------------
 
