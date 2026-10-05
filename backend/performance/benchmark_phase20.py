@@ -17,14 +17,15 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
-if str(BACKEND_DIR) not in os.sys.path:
-    os.sys.path.insert(0, str(BACKEND_DIR))
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 from model_manager import (  # noqa: E402
     performance_status,
