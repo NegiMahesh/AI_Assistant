@@ -254,6 +254,67 @@ def detect_ai_intent(text: str) -> str:
 
 
 # =========================================================
+# PHASE 19.6 — MULTI-INTENT DETECTION
+# =========================================================
+# Detect multiple AI intents in one request without changing the
+# existing deterministic tool/action priority. This lets model
+# selection choose a suitable model for compound AI questions.
+# =========================================================
+
+AI_INTENT_PRIORITY = (
+    "coding",
+    "complex_reasoning",
+    "normal_question",
+    "simple_question",
+    "greeting",
+    "chat",
+)
+
+
+def detect_ai_intents(text: str) -> tuple[str, ...]:
+    """Return all meaningful AI intents detected in a request."""
+
+    text = str(text or "").lower().strip()
+
+    if not text:
+        return ("chat",)
+
+    intents = []
+
+    if _matches(text, CODING_PATTERNS):
+        intents.append("coding")
+
+    if _matches(text, COMPLEX_PATTERNS):
+        intents.append("complex_reasoning")
+
+    if _matches(text, FAST_PATTERNS):
+        intents.append("greeting")
+
+    if _matches(text, SIMPLE_QUESTION_PATTERNS) and len(text) <= 100:
+        intents.append("simple_question")
+
+    if "?" in text or _matches(text, QUESTION_START_PATTERNS):
+        intents.append("normal_question")
+
+    if not intents:
+        return ("chat",)
+
+    # Remove duplicate/overlapping classifications while keeping the
+    # strongest intent first.
+    return tuple(
+        intent
+        for intent in AI_INTENT_PRIORITY
+        if intent in intents
+    )
+
+
+def is_multi_intent(text: str) -> bool:
+    """Return True when a request contains two or more AI intents."""
+
+    return len(detect_ai_intents(text)) > 1
+
+
+# =========================================================
 # PHASE 19.3 — INTELLIGENT MODEL SELECTION
 # =========================================================
 # Select the smallest suitable model for the detected intent.
@@ -288,7 +349,21 @@ def select_model(
     confidence = INTENT_CONFIDENCE.get(intent, 0.0)
 
     if intent == "chat":
-        intent, confidence = detect_ai_intent_with_confidence(text)
+        intents = detect_ai_intents(text)
+        intent = intents[0]
+        confidence = INTENT_CONFIDENCE.get(intent, 0.0)
+
+        # Compound AI requests should be handled by the strongest
+        # required model rather than the smallest matching model.
+        if len(intents) > 1:
+            if "coding" in intents:
+                return CODING_MODEL
+            if "complex_reasoning" in intents:
+                return COMPLEX_MODEL
+            if "normal_question" in intents:
+                return GENERAL_MODEL
+            if "simple_question" in intents:
+                return FAST_MODEL
 
     # Protect model selection from invalid/unknown intent values.
     if intent not in INTENT_MODEL_MAP:
