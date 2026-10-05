@@ -364,30 +364,33 @@ def select_model(
     if route != "ai":
         return None
 
-    # Older callers may still pass the default "chat" intent.
-    # Re-detect it so Phase 19.2 directly feeds Phase 19.3.
+    # Always inspect all detected AI intents so the real /assistant flow
+    # benefits from Phase 19.6, even when route_input() already supplied
+    # the primary intent.
+    intents = detect_ai_intents(text)
     confidence = INTENT_CONFIDENCE.get(intent, 0.0)
 
-    if intent == "chat":
-        intents = detect_ai_intents(text)
-        intent = intents[0]
+    if len(intents) > 1:
+        # Compound AI requests should use the strongest model only when
+        # there is a strong signal that it is actually required.
+        if "coding" in intents and _matches(text, STRONG_CODING_PATTERNS):
+            intent = "coding"
+        elif "complex_reasoning" in intents and _matches(
+            text, COMPLEX_STRONG_PATTERNS
+        ):
+            intent = "complex_reasoning"
+        elif "normal_question" in intents:
+            intent = "normal_question"
+        elif "simple_question" in intents:
+            intent = "simple_question"
+        else:
+            intent = intents[0]
+
         confidence = INTENT_CONFIDENCE.get(intent, 0.0)
 
-        # Compound AI requests should use the strongest model only
-        # when there is a strong signal that it is actually required.
-        # This prevents ordinary mixed questions from unnecessarily
-        # loading the 3B/4B models on CPU-only systems.
-        if len(intents) > 1:
-            if "coding" in intents and _matches(text, STRONG_CODING_PATTERNS):
-                return CODING_MODEL
-            if "complex_reasoning" in intents and _matches(
-                text, COMPLEX_STRONG_PATTERNS
-            ):
-                return COMPLEX_MODEL
-            if "normal_question" in intents:
-                return GENERAL_MODEL
-            if "simple_question" in intents:
-                return FAST_MODEL
+    elif intent == "chat":
+        intent = intents[0]
+        confidence = INTENT_CONFIDENCE.get(intent, 0.0)
 
     # Protect model selection from invalid/unknown intent values.
     if intent not in INTENT_MODEL_MAP:
