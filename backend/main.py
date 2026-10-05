@@ -25,7 +25,11 @@ from insightface.app import FaceAnalysis
 
 from speech.speech_to_text import transcribe_audio
 from tts.text_to_speech import speak
-from router.ai_router import route_input, select_model
+from router.ai_router import (
+    route_input,
+    select_model,
+    get_response_token_budget,
+)
 
 from model_manager import (
     chat as model_chat,
@@ -2074,12 +2078,14 @@ def generate_ai_response(
         history,
     )
 
+    intent_for_budget = route_input(message).get("intent", "chat")
+
     if model is None:
 
         model = select_model(
             message,
             route="ai",
-            intent="chat",
+            intent=intent_for_budget,
             vision=vision,
             file_context=file_context,
         )
@@ -2103,6 +2109,12 @@ def generate_ai_response(
                 "content": prompt,
             },
         ],
+        options_override={
+            "num_predict": get_response_token_budget(
+                message,
+                intent=intent_for_budget,
+            )
+        },
     )
 
     return response["message"]["content"]
@@ -2128,12 +2140,14 @@ def generate_ai_stream(
         history,
     )
 
+    intent_for_budget = route_input(message).get("intent", "chat")
+
     if model is None:
 
         model = select_model(
             message,
             route="ai",
-            intent="chat",
+            intent=intent_for_budget,
             vision=vision,
             file_context=file_context,
         )
@@ -2160,6 +2174,12 @@ def generate_ai_stream(
                 "content": prompt,
             },
         ],
+        options_override={
+            "num_predict": get_response_token_budget(
+                message,
+                intent=intent_for_budget,
+            )
+        },
     )
 
     for chunk in response:
