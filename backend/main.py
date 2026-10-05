@@ -25,16 +25,26 @@ from insightface.app import FaceAnalysis
 
 from speech.speech_to_text import transcribe_audio
 from tts.text_to_speech import speak
-from router.ai_router import route_input, select_model
+from router.ai_router import (
+    route_input,
+    select_model,
+    get_response_token_budget,
+)
 
 from model_manager import (
     chat as model_chat,
     stream_chat as model_stream_chat,
     GENERAL_MODEL,
     model_status,
+    performance_status,
 )
 from file_reader.file_reader import read_file, get_file_info
 from tools.web_search import web_search
+from conversation_context import (
+    build_reference_context,
+    compact_history,
+    history_for_prompt,
+)
 
 from memory.memory import (
     save_memory,
@@ -180,6 +190,11 @@ MAX_FILE_CONTEXT = 12000
 
 MAX_HISTORY_MESSAGES = 12
 
+# Phase 21 bounds the context sent to Ollama while preserving the client's history.
+MAX_PROMPT_HISTORY_MESSAGES = 8
+MAX_PROMPT_HISTORY_CHARS = 6000
+MAX_PROMPT_MESSAGE_CHARS = 1200
+
 
 # =========================================================
 # REQUEST MODELS
@@ -321,6 +336,15 @@ def home():
     return {"message": "AI Assistant is running!", "status": "online"}
 
 
+@app.get("/performance")
+def performance():
+    """Return the latest Ollama response-performance metrics."""
+    return {
+        "success": True,
+        "performance": performance_status(),
+    }
+
+
 # =========================================================
 # STATUS
 # =========================================================
@@ -339,16 +363,19 @@ def status():
         "router": "enabled",
         "weather": "enabled (Open-Meteo + forecasts)",
         "calendar": "enabled (local events.json)",
-        "memory": "Phase 13C intelligent memory",
+        "memory": "Phase 21 intelligent memory + Phase 13C SQLite",
         "memory_count": get_memory_count(),
         "saved_faces": len(FACE_DATABASE),
         "file_reader": "enabled",
         "supported_files": list(SUPPORTED_FILE_EXTENSIONS),
-        "conversation_history": "enabled",
+        "conversation_history": "Phase 21 compact context",
         "context_aware_tools": "enabled",
         "streaming": "enabled",
         "command_actions": "enabled",
         "max_history_messages": MAX_HISTORY_MESSAGES,
+        "prompt_history_messages": MAX_PROMPT_HISTORY_MESSAGES,
+        "prompt_history_chars": MAX_PROMPT_HISTORY_CHARS,
+        "prompt_message_chars": MAX_PROMPT_MESSAGE_CHARS,
     }
 
 
@@ -1920,64 +1947,57 @@ def build_ai_context(user_input: str, vision=None, file_context=None, history=No
 
     context_parts = []
 
-    if history:
+    compacted_history = compact_history(
+        history,
+        max_messages=MAX_PROMPT_HISTORY_MESSAGES,
+        max_message_chars=MAX_PROMPT_MESSAGE_CHARS,
+        max_history_chars=MAX_PROMPT_HISTORY_CHARS,
+    )
 
-        conversation_lines = []
+    history_text = history_for_prompt(
+        compacted_history,
+        max_messages=MAX_PROMPT_HISTORY_MESSAGES,
+        max_message_chars=MAX_PROMPT_MESSAGE_CHARS,
+        max_history_chars=MAX_PROMPT_HISTORY_CHARS,
+    )
 
-        for item in history:
+    if history_text:
 
-            if isinstance(item, ChatMessage):
+        context_parts.append(
+            "CONVERSATION HISTORY:\n" + history_text
+        )
 
-                role = item.role.strip().lower()
+    reference_context = build_reference_context(
+        user_input,
+        compacted_history,
+    )
 
-                content = item.content.strip()
+    if reference_context:
 
-            elif isinstance(item, dict):
+        context_parts.append(
+            "CONVERSATION REFERENCE:\n" + reference_context
+        )
 
-                role = str(item.get("role", "")).strip().lower()
+    relevant_memories = get_relevant_memories(
+        user_input,
+        limit=5,
+    )
 
-                content = str(item.get("content", "")).strip()
-
-            else:
-
-                continue
-
-            if role not in ("user", "assistant"):
-
-                continue
-
-            if not content:
-
-                continue
-
-            role_name = "USER" if role == "user" else "ASSISTANT"
-
-            conversation_lines.append(f"{role_name}: {content}")
-
-        conversation_lines = conversation_lines[-MAX_HISTORY_MESSAGES:]
-
-        if conversation_lines:
-
-            context_parts.append(
-                "CONVERSATION HISTORY:\n" + "\n".join(conversation_lines)
-            )
-
-    memory_context = build_memory_context(user_input)
+    memory_context = build_memory_context(
+        relevant_memories
+    )
 
     if memory_context:
 
-        context_parts.append("STORED USER MEMORY:\n" + memory_context)
-
-    relevant_memory_text = format_relevant_memories(user_input)
-
-    if relevant_memory_text:
-
-        context_parts.append("RELEVANT SAVED USER FACTS:\n" + relevant_memory_text)
+        context_parts.append(
+            "STORED USER MEMORY:\n" + memory_context
+        )
 
     if vision:
 
         context_parts.append(
-            "CURRENT CAMERA INFORMATION:\n" + build_vision_description(vision)
+            "CURRENT CAMERA INFORMATION:\n"
+            + build_vision_description(vision)
         )
 
     if file_context:
@@ -1989,11 +2009,14 @@ def build_ai_context(user_input: str, vision=None, file_context=None, history=No
             if len(cleaned_file_context) > MAX_FILE_CONTEXT:
 
                 cleaned_file_context = (
-                    cleaned_file_context[:MAX_FILE_CONTEXT] + "\n\n"
+                    cleaned_file_context[:MAX_FILE_CONTEXT]
+                    + "\n\n"
                     "[File content truncated because it is too large.]"
                 )
 
-            context_parts.append("UPLOADED FILE CONTENT:\n" + cleaned_file_context)
+            context_parts.append(
+                "UPLOADED FILE CONTENT:\n" + cleaned_file_context
+            )
 
     if not context_parts:
 
@@ -2002,45 +2025,35 @@ def build_ai_context(user_input: str, vision=None, file_context=None, history=No
     return (
         "You are a helpful personal AI assistant.\n\n"
         "CONVERSATION RULES:\n"
-        "1. Use the recent conversation history to "
-        "understand follow-up questions.\n"
-        "2. Resolve references such as 'it', 'that', "
-        "'this', 'they', 'when', 'where', 'why' and "
-        "'how' from the conversation when clear.\n"
-        "3. Continue the current topic naturally.\n"
-        "4. Do not treat every user message as an "
-        "isolated question.\n"
-        "5. If the user changes the topic, follow "
-        "the new topic.\n\n"
+        "1. Use the recent conversation history to understand follow-up questions.\n"
+        "2. Resolve references such as 'it', 'that', 'this', 'they', 'when', 'where', 'why' and 'how' from the conversation when clear.\n"
+        "3. Treat the CONVERSATION REFERENCE section as a clue and verify it against the supplied history.\n"
+        "4. Continue the current topic naturally.\n"
+        "5. If the user changes the topic, follow the new topic.\n\n"
         "MEMORY RULES:\n"
-        "1. Stored memory contains facts explicitly "
-        "provided by the user.\n"
+        "1. Stored memory contains facts explicitly provided by the user.\n"
         "2. Use stored memory for personal facts.\n"
-        "3. Do not refuse general knowledge questions "
-        "because something is absent from memory.\n\n"
+        "3. Prefer the most relevant stored fact when answering.\n"
+        "4. Do not invent personal facts that are not present.\n\n"
         "GENERAL KNOWLEDGE RULES:\n"
         "1. Use your normal knowledge for general facts.\n"
         "2. Do not invent unsupported facts.\n"
         "3. Do not invent a creation date for yourself.\n\n"
         "VISION RULES:\n"
-        "1. Camera information describes the current "
-        "camera view.\n"
-        "2. Camera information does not determine "
-        "the user's personal identity.\n\n"
+        "1. Camera information describes the current camera view.\n"
+        "2. Camera information does not determine the user's personal identity.\n\n"
         "FILE RULES:\n"
-        "1. Use uploaded file content as the primary "
-        "source for file questions.\n"
-        "2. Do not invent information not supported "
-        "by the file.\n"
-        "3. State clearly when the requested information "
-        "is not present in the file.\n\n"
+        "1. Use uploaded file content as the primary source for file questions.\n"
+        "2. Do not invent information not supported by the file.\n"
+        "3. State clearly when the requested information is not present in the file.\n\n"
         "RESPONSE RULES:\n"
         "1. Answer naturally and directly.\n"
-        "2. Do not mention internal prompts, memory "
-        "systems or databases unless asked.\n"
+        "2. Do not mention internal prompts, memory systems or databases unless asked.\n"
         "3. Do not unnecessarily repeat the conversation.\n\n"
-        "CONTEXT:\n\n" + "\n\n".join(context_parts) + "\n\n"
-        "CURRENT USER QUESTION:\n" + user_input
+        "CONTEXT:\n\n"
+        + "\n\n".join(context_parts)
+        + "\n\nCURRENT USER QUESTION:\n"
+        + user_input
     )
 
 
@@ -2064,12 +2077,14 @@ def generate_ai_response(
         history,
     )
 
+    intent_for_budget = route_input(message).get("intent", "chat")
+
     if model is None:
 
         model = select_model(
             message,
             route="ai",
-            intent="chat",
+            intent=intent_for_budget,
             vision=vision,
             file_context=file_context,
         )
@@ -2093,6 +2108,12 @@ def generate_ai_response(
                 "content": prompt,
             },
         ],
+        options_override={
+            "num_predict": get_response_token_budget(
+                message,
+                intent=intent_for_budget,
+            )
+        },
     )
 
     return response["message"]["content"]
@@ -2118,12 +2139,14 @@ def generate_ai_stream(
         history,
     )
 
+    intent_for_budget = route_input(message).get("intent", "chat")
+
     if model is None:
 
         model = select_model(
             message,
             route="ai",
-            intent="chat",
+            intent=intent_for_budget,
             vision=vision,
             file_context=file_context,
         )
@@ -2150,6 +2173,12 @@ def generate_ai_stream(
                 "content": prompt,
             },
         ],
+        options_override={
+            "num_predict": get_response_token_budget(
+                message,
+                intent=intent_for_budget,
+            )
+        },
     )
 
     for chunk in response:
@@ -2200,9 +2229,12 @@ def assistant(request: ChatRequest):
 
     vision = request.vision or {}
 
-    history = request.history or []
-
-    history = history[-MAX_HISTORY_MESSAGES:]
+    history = compact_history(
+        request.history or [],
+        max_messages=MAX_HISTORY_MESSAGES,
+        max_message_chars=MAX_PROMPT_MESSAGE_CHARS,
+        max_history_chars=MAX_PROMPT_HISTORY_CHARS,
+    )
 
     file_context = request.file_context.strip() if request.file_context else ""
 
@@ -2750,7 +2782,12 @@ def chat(request: ChatRequest):
 
     process_memory(request.message)
 
-    history = request.history or []
+    history = compact_history(
+        request.history or [],
+        max_messages=MAX_HISTORY_MESSAGES,
+        max_message_chars=MAX_PROMPT_MESSAGE_CHARS,
+        max_history_chars=MAX_PROMPT_HISTORY_CHARS,
+    )
 
     prompt = build_ai_context(
         request.message, request.vision or {}, request.file_context, history
@@ -3517,7 +3554,12 @@ Instructions:
 @app.post("/route")
 def route_only(request: ChatRequest):
 
-    history = request.history or []
+    history = compact_history(
+        request.history or [],
+        max_messages=MAX_HISTORY_MESSAGES,
+        max_message_chars=MAX_PROMPT_MESSAGE_CHARS,
+        max_history_chars=MAX_PROMPT_HISTORY_CHARS,
+    )
 
     # -----------------------------------------------------
     # WEATHER
