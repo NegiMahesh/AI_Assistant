@@ -123,7 +123,11 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
             except AttributeError:
                 content = ""
 
-            if content and first_token_at is None:
+            # Record first response chunk as soon as Ollama starts
+            # producing output, even if its text content is empty.
+            if first_token_at is None and (
+                content or chunk.get("done") is True
+            ):
                 first_token_at = time.perf_counter()
                 LAST_PERFORMANCE["first_token_ms"] = round(
                     (first_token_at - started) * 1000, 2
@@ -131,45 +135,48 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
 
             yield chunk
 
-        finished = time.perf_counter()
-        LAST_PERFORMANCE["total_ms"] = round(
-            (finished - started) * 1000, 2
-        )
-
-        load_duration = final_chunk.get("load_duration")
-        prompt_eval_duration = final_chunk.get("prompt_eval_duration")
-        eval_duration = final_chunk.get("eval_duration")
-        prompt_tokens = final_chunk.get("prompt_eval_count")
-        generated_tokens = final_chunk.get("eval_count")
-
-        if load_duration is not None:
-            LAST_PERFORMANCE["load_duration_ms"] = round(
-                load_duration / 1_000_000, 2
-            )
-        if prompt_eval_duration is not None:
-            LAST_PERFORMANCE["prompt_eval_duration_ms"] = round(
-                prompt_eval_duration / 1_000_000, 2
-            )
-        if eval_duration is not None:
-            LAST_PERFORMANCE["eval_duration_ms"] = round(
-                eval_duration / 1_000_000, 2
-            )
-        if prompt_tokens is not None:
-            LAST_PERFORMANCE["prompt_tokens"] = prompt_tokens
-        if generated_tokens is not None:
-            LAST_PERFORMANCE["generated_tokens"] = generated_tokens
-
-        if eval_duration and generated_tokens:
-            LAST_PERFORMANCE["tokens_per_second"] = round(
-                generated_tokens / (eval_duration / 1_000_000_000), 2
-            )
+        _update_stream_metrics(final_chunk)
 
     except Exception as error:
         LAST_PERFORMANCE["error"] = str(error)
+        raise
+
+    finally:
+        # A disconnected/aborted client may close the generator before the
+        # final Ollama chunk reaches us. Always preserve elapsed time.
         LAST_PERFORMANCE["total_ms"] = round(
             (time.perf_counter() - started) * 1000, 2
         )
-        raise
+
+
+def _update_stream_metrics(final_chunk: dict) -> None:
+    load_duration = final_chunk.get("load_duration")
+    prompt_eval_duration = final_chunk.get("prompt_eval_duration")
+    eval_duration = final_chunk.get("eval_duration")
+    prompt_tokens = final_chunk.get("prompt_eval_count")
+    generated_tokens = final_chunk.get("eval_count")
+
+    if load_duration is not None:
+        LAST_PERFORMANCE["load_duration_ms"] = round(
+            load_duration / 1_000_000, 2
+        )
+    if prompt_eval_duration is not None:
+        LAST_PERFORMANCE["prompt_eval_duration_ms"] = round(
+            prompt_eval_duration / 1_000_000, 2
+        )
+    if eval_duration is not None:
+        LAST_PERFORMANCE["eval_duration_ms"] = round(
+            eval_duration / 1_000_000, 2
+        )
+    if prompt_tokens is not None:
+        LAST_PERFORMANCE["prompt_tokens"] = prompt_tokens
+    if generated_tokens is not None:
+        LAST_PERFORMANCE["generated_tokens"] = generated_tokens
+
+    if eval_duration and generated_tokens:
+        LAST_PERFORMANCE["tokens_per_second"] = round(
+            generated_tokens / (eval_duration / 1_000_000_000), 2
+        )
 
 
 def performance_status():
