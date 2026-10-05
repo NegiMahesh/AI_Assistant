@@ -23,9 +23,38 @@ ALL_MODELS = [
 
 # Ollama already decides how much work to place on CPU/GPU. The old
 # num_gpu=0 option explicitly disabled GPU acceleration.
-MODEL_OPTIONS = {
-    "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", "4096")),
+#
+# Keep a global override for easy tuning, but use smaller model-specific
+# contexts by default so the fast CPU models do not reserve unnecessary
+# context memory.
+DEFAULT_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
+
+
+def _env_int(*names: str, default: int) -> int:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            try:
+                return max(512, int(value))
+            except ValueError:
+                pass
+    return default
+
+
+MODEL_CONTEXT = {
+    FAST_MODEL: _env_int("FAST_NUM_CTX", default=2048),
+    GENERAL_MODEL: _env_int("GENERAL_NUM_CTX", default=3072),
+    COMPLEX_MODEL: _env_int("COMPLEX_NUM_CTX", default=4096),
+    CODING_MODEL: _env_int("CODING_NUM_CTX", default=4096),
+    VISION_MODEL: _env_int("VISION_NUM_CTX", default=4096),
 }
+
+
+def get_model_options(model_name: str) -> dict:
+    return {
+        "num_ctx": MODEL_CONTEXT.get(model_name, DEFAULT_NUM_CTX),
+    }
+
 
 THINK_MODE = os.getenv("OLLAMA_THINK_MODE", "auto").lower().strip()
 MODEL_THINK = {
@@ -70,7 +99,7 @@ def unload_model(model_name: str) -> None:
             model=model_name,
             messages=[],
             keep_alive=0,
-            options=MODEL_OPTIONS,
+            options=get_model_options(model_name),
         )
         print(f"Ollama model unloaded: {model_name}")
     except Exception as error:
@@ -98,7 +127,7 @@ def chat(model_name: str, messages: Iterable[dict]):
         "model": model_name,
         "messages": list(messages),
         "keep_alive": get_keep_alive(model_name),
-        "options": MODEL_OPTIONS,
+        "options": get_model_options(model_name),
     }
 
     think = get_think(model_name)
@@ -214,7 +243,10 @@ def performance_status():
         "active_model": ACTIVE_MODEL,
         "model_switch_count": MODEL_SWITCH_COUNT,
         "keep_alive": KEEP_ALIVE,
-        "model_options": MODEL_OPTIONS,
+        "model_options": get_model_options(LAST_PERFORMANCE["model"])
+        if LAST_PERFORMANCE["model"] else get_model_options(GENERAL_MODEL),
+        "model_context": MODEL_CONTEXT,
+        "default_num_ctx": DEFAULT_NUM_CTX,
         "think_mode": THINK_MODE,
         "chat_supports_think": CHAT_SUPPORTS_THINK,
         "model_think": get_think(LAST_PERFORMANCE["model"])
@@ -231,6 +263,9 @@ def model_status():
         "vision": VISION_MODEL,
         "active_model": ACTIVE_MODEL,
         "gpu_auto": True,
-        "model_options": MODEL_OPTIONS,
+        "model_options": get_model_options(ACTIVE_MODEL)
+        if ACTIVE_MODEL else get_model_options(GENERAL_MODEL),
+        "model_context": MODEL_CONTEXT,
+        "default_num_ctx": DEFAULT_NUM_CTX,
         "keep_alive": KEEP_ALIVE,
     }
