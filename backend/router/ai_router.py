@@ -360,6 +360,50 @@ INTENT_MODEL_MAP = {
 }
 
 
+# Phase 20.7 — adaptive response budgets. These are generation limits,
+# not response-length guarantees. They reduce unnecessary CPU work while
+# leaving more room for coding and complex reasoning.
+RESPONSE_TOKEN_BUDGET = {
+    "greeting": 64,
+    "simple_question": 128,
+    "normal_question": 256,
+    "chat": 192,
+    "coding": 384,
+    "complex_reasoning": 768,
+}
+
+
+def get_response_token_budget(
+    user_input: str,
+    intent: str = "chat",
+) -> int:
+    text = str(user_input or "").lower().strip()
+
+    intents = detect_ai_intents(text)
+    selected_intent = intent if intent in INTENT_CONFIDENCE else "chat"
+
+    if len(intents) > 1:
+        if "coding" in intents and _matches(text, STRONG_CODING_PATTERNS):
+            selected_intent = "coding"
+        elif "complex_reasoning" in intents and _matches(
+            text, COMPLEX_STRONG_PATTERNS
+        ):
+            selected_intent = "complex_reasoning"
+        elif "normal_question" in intents:
+            selected_intent = "normal_question"
+        elif "simple_question" in intents:
+            selected_intent = "simple_question"
+        else:
+            selected_intent = intents[0]
+    elif intent == "chat":
+        selected_intent = intents[0]
+
+    return RESPONSE_TOKEN_BUDGET.get(
+        selected_intent,
+        RESPONSE_TOKEN_BUDGET["chat"],
+    )
+
+
 def select_model(
     user_input: str,
     route: str = "ai",
