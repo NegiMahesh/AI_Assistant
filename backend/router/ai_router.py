@@ -130,6 +130,13 @@ FAST_PATTERNS = (
     r"^what\s+can\s+you\s+do\??$",
 )
 
+# Greeting prefixes are only used by multi-intent detection. They do not
+# make a compound question a standalone greeting in detect_ai_intent().
+COMPOUND_GREETING_PATTERNS = (
+    r"^\s*(?:hi|hello|hey)\b",
+    r"^\s*good\s+(?:morning|afternoon|evening)\b",
+)
+
 
 def _route(route: str, intent: str, reason: str):
     return {
@@ -298,7 +305,9 @@ def detect_ai_intents(text: str) -> tuple[str, ...]:
     if _matches(text, COMPLEX_PATTERNS):
         intents.append("complex_reasoning")
 
-    if _matches(text, FAST_PATTERNS):
+    if _matches(text, FAST_PATTERNS) or _matches(
+        text, COMPOUND_GREETING_PATTERNS
+    ):
         intents.append("greeting")
 
     if _matches(text, SIMPLE_QUESTION_PATTERNS) and len(text) <= 100:
