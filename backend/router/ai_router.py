@@ -310,10 +310,18 @@ def detect_ai_intents(text: str) -> tuple[str, ...]:
     ):
         intents.append("greeting")
 
-    if _matches(text, SIMPLE_QUESTION_PATTERNS) and len(text) <= 100:
+    is_simple_question = (
+        _matches(text, SIMPLE_QUESTION_PATTERNS) and len(text) <= 100
+    )
+
+    if is_simple_question:
         intents.append("simple_question")
 
-    if "?" in text or _matches(text, QUESTION_START_PATTERNS):
+    # "normal_question" is the broad fallback for questions. Do not add
+    # it when a more specific simple-question intent already matched.
+    if not is_simple_question and (
+        "?" in text or _matches(text, QUESTION_START_PATTERNS)
+    ):
         intents.append("normal_question")
 
     if not intents:
