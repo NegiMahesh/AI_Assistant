@@ -75,8 +75,22 @@ def get_think(model_name: str):
 # Keep models warm briefly. Ollama can evict models when memory is needed,
 # while avoiding an expensive reload on every model switch.
 KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "60s")
+
+# Keep the small/medium models warm for fast switching, but never keep more
+# than one large model resident at the same time on a CPU-only machine.
+LARGE_MODELS = {
+    COMPLEX_MODEL,
+    CODING_MODEL,
+    VISION_MODEL,
+}
+MAX_LARGE_RESIDENT = max(
+    1,
+    int(os.getenv("MAX_LARGE_RESIDENT", "1")),
+)
+
 ACTIVE_MODEL: str | None = None
 MODEL_SWITCH_COUNT = 0
+LARGE_MODEL_EVICTION_COUNT = 0
 
 LAST_PERFORMANCE = {
     "model": None,
@@ -93,7 +107,7 @@ LAST_PERFORMANCE = {
 
 
 def unload_model(model_name: str) -> None:
-    """Explicitly unload a model when the caller really needs to free memory."""
+    """Unload one model without deleting it from the Ollama model store."""
     try:
         ollama.chat(
             model=model_name,
@@ -106,9 +120,66 @@ def unload_model(model_name: str) -> None:
         print(f"Could not unload {model_name}: {error}")
 
 
+def get_loaded_models() -> list[dict]:
+    """Return currently resident Ollama models for performance monitoring."""
+    try:
+        response = ollama.ps()
+    except Exception as error:
+        return [{"error": str(error)}]
+
+    loaded = []
+
+    for model in getattr(response, "models", []) or []:
+        loaded.append(
+            {
+                "model": getattr(model, "model", None),
+                "size": getattr(model, "size", None),
+                "size_vram": getattr(model, "size_vram", None),
+                "expires_at": getattr(model, "expires_at", None),
+                "context_length": getattr(model, "context_length", None),
+            }
+        )
+
+    return loaded
+
+
+def enforce_large_model_limit(target_model: str) -> None:
+    """Keep at most MAX_LARGE_RESIDENT large models resident."""
+    global LARGE_MODEL_EVICTION_COUNT
+
+    if target_model not in LARGE_MODELS:
+        return
+
+    loaded = get_loaded_models()
+    if any(item.get("error") for item in loaded):
+        return
+
+    resident_large = [
+        item.get("model")
+        for item in loaded
+        if item.get("model") in LARGE_MODELS
+    ]
+
+    # The target itself may already be resident, so no eviction is needed.
+    other_large = [
+        model
+        for model in resident_large
+        if model and model != target_model
+    ]
+
+    allowed_others = max(0, MAX_LARGE_RESIDENT - 1)
+
+    for model in other_large[: max(0, len(other_large) - allowed_others)]:
+        unload_model(model)
+        LARGE_MODEL_EVICTION_COUNT += 1
+
+
 def prepare_model(model_name: str) -> None:
-    """Mark a model active without forcing the previous model out of memory."""
+    """Track the active model and enforce large-model residency limits."""
     global ACTIVE_MODEL, MODEL_SWITCH_COUNT
+
+    if model_name in LARGE_MODELS:
+        enforce_large_model_limit(model_name)
 
     if ACTIVE_MODEL != model_name:
         print(f"Ollama active model: {model_name}")
@@ -251,6 +322,10 @@ def performance_status():
         "chat_supports_think": CHAT_SUPPORTS_THINK,
         "model_think": get_think(LAST_PERFORMANCE["model"])
         if LAST_PERFORMANCE["model"] else None,
+        "large_models": sorted(LARGE_MODELS),
+        "max_large_resident": MAX_LARGE_RESIDENT,
+        "large_model_eviction_count": LARGE_MODEL_EVICTION_COUNT,
+        "loaded_models": get_loaded_models(),
     }
 
 
@@ -268,4 +343,8 @@ def model_status():
         "model_context": MODEL_CONTEXT,
         "default_num_ctx": DEFAULT_NUM_CTX,
         "keep_alive": KEEP_ALIVE,
+        "large_models": sorted(LARGE_MODELS),
+        "max_large_resident": MAX_LARGE_RESIDENT,
+        "large_model_eviction_count": LARGE_MODEL_EVICTION_COUNT,
+        "loaded_models": get_loaded_models(),
     }
