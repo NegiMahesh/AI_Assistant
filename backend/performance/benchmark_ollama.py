@@ -95,7 +95,7 @@ def main() -> None:
     print("===========================")
     models = args.sequence or [args.model]
 
-    print(f"Models     : {" -> ".join(models)}")
+    print("Models     : " + " -> ".join(models))
     print(f"Iterations : {args.iterations}")
     print(f"Prompt     : {args.prompt}")
     print()
