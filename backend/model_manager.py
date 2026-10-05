@@ -90,6 +90,7 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
 
     started = time.perf_counter()
     first_token_at = None
+    final_chunk = {}
 
     LAST_PERFORMANCE.update(
         {
@@ -116,6 +117,7 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
         )
 
         for chunk in response:
+            final_chunk = chunk
             try:
                 content = chunk.get("message", {}).get("content", "")
             except AttributeError:
@@ -134,11 +136,11 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
             (finished - started) * 1000, 2
         )
 
-        load_duration = chunk.get("load_duration")
-        prompt_eval_duration = chunk.get("prompt_eval_duration")
-        eval_duration = chunk.get("eval_duration")
-        prompt_tokens = chunk.get("prompt_eval_count")
-        generated_tokens = chunk.get("eval_count")
+        load_duration = final_chunk.get("load_duration")
+        prompt_eval_duration = final_chunk.get("prompt_eval_duration")
+        eval_duration = final_chunk.get("eval_duration")
+        prompt_tokens = final_chunk.get("prompt_eval_count")
+        generated_tokens = final_chunk.get("eval_count")
 
         if load_duration is not None:
             LAST_PERFORMANCE["load_duration_ms"] = round(
