@@ -204,7 +204,7 @@ class TestPhase197Routing(unittest.TestCase):
         )
 
     def test_multi_intent_coding_request_uses_coding_model(self):
-        text = "Explain this Python error and tell me how to fix it"
+        text = "Can you explain this Python error and tell me how to fix it?"
         intents = detect_ai_intents(text)
 
         self.assertTrue(is_multi_intent(text))
@@ -216,7 +216,7 @@ class TestPhase197Routing(unittest.TestCase):
         )
 
     def test_multi_intent_complex_request_uses_complex_model(self):
-        text = "Explain RISC vs CISC in detail and compare their advantages"
+        text = "Can you explain RISC vs CISC in detail and compare their advantages?"
         intents = detect_ai_intents(text)
 
         self.assertIn("complex_reasoning", intents)
