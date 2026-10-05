@@ -165,7 +165,7 @@ def stream_chat(model_name: str, messages: Iterable[dict]):
             "messages": list(messages),
             "stream": True,
             "keep_alive": get_keep_alive(model_name),
-            "options": MODEL_OPTIONS,
+            "options": get_model_options(model_name),
         }
 
         think = get_think(model_name)
