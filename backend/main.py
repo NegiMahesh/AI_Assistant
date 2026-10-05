@@ -32,6 +32,7 @@ from model_manager import (
     stream_chat as model_stream_chat,
     GENERAL_MODEL,
     model_status,
+    performance_status,
 )
 from file_reader.file_reader import read_file, get_file_info
 from tools.web_search import web_search
@@ -319,6 +320,15 @@ load_face_database()
 def home():
 
     return {"message": "AI Assistant is running!", "status": "online"}
+
+
+@app.get("/performance")
+def performance():
+    """Return the latest Ollama response-performance metrics."""
+    return {
+        "success": True,
+        "performance": performance_status(),
+    }
 
 
 # =========================================================
