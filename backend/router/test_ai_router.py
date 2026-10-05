@@ -30,6 +30,7 @@ from router.ai_router import (  # noqa: E402
     is_multi_intent,
     route_input,
     select_model,
+    get_response_token_budget,
 )
 
 
@@ -126,6 +127,49 @@ class TestPhase197Routing(unittest.TestCase):
                 intent="chat",
             ),
             GENERAL_MODEL,
+        )
+
+    # -----------------------------------------------------
+    # Phase 20.7 — Adaptive response budgets
+    # -----------------------------------------------------
+
+    def test_response_budget_for_greeting(self):
+        self.assertEqual(
+            get_response_token_budget("Hello", intent="greeting"),
+            64,
+        )
+
+    def test_response_budget_for_simple_question(self):
+        self.assertEqual(
+            get_response_token_budget("What is RAM?", intent="simple_question"),
+            128,
+        )
+
+    def test_response_budget_for_normal_question(self):
+        self.assertEqual(
+            get_response_token_budget(
+                "How does virtual memory work?",
+                intent="normal_question",
+            ),
+            256,
+        )
+
+    def test_response_budget_for_coding(self):
+        self.assertEqual(
+            get_response_token_budget(
+                "Can you explain this Python error and tell me how to fix it?",
+                intent="coding",
+            ),
+            384,
+        )
+
+    def test_response_budget_for_complex(self):
+        self.assertEqual(
+            get_response_token_budget(
+                "Can you explain RISC vs CISC in detail and compare their advantages?",
+                intent="complex_reasoning",
+            ),
+            768,
         )
 
     # -----------------------------------------------------
