@@ -60,7 +60,13 @@ def main() -> None:
     parser.add_argument(
         "--model",
         default=GENERAL_MODEL,
-        help="Ollama model to benchmark.",
+        help="Single Ollama model to benchmark.",
+    )
+    parser.add_argument(
+        "--sequence",
+        nargs="+",
+        help="Run a model sequence in the same Python process, e.g. "
+        "--sequence qwen3:1.7b qwen3:0.6b qwen3:1.7b",
     )
     parser.add_argument(
         "--prompt",
@@ -87,29 +93,33 @@ def main() -> None:
 
     print("Phase 20.1 Ollama Benchmark")
     print("===========================")
-    print(f"Model      : {args.model}")
+    models = args.sequence or [args.model]
+
+    print(f"Models     : {" -> ".join(models)}")
     print(f"Iterations : {args.iterations}")
     print(f"Prompt     : {args.prompt}")
     print()
 
-    if args.model not in known_models:
-        print("Warning: model is not one of the configured AI models.")
+    for model in models:
+        if model not in known_models:
+            print(f"Warning: {model} is not one of the configured AI models.")
 
-    for index in range(1, args.iterations + 1):
-        metrics = run_once(args.model, args.prompt)
+        for index in range(1, args.iterations + 1):
+            metrics = run_once(model, args.prompt)
 
-        print(f"Request {index}")
-        print(f"  Wall clock       : {metrics['wall_clock_ms']} ms")
-        print(f"  First token      : {metrics['first_token_ms']} ms")
-        print(f"  Model load       : {metrics['load_duration_ms']} ms")
-        print(f"  Prompt eval      : {metrics['prompt_eval_duration_ms']} ms")
-        print(f"  Generation       : {metrics['eval_duration_ms']} ms")
-        print(f"  Prompt tokens    : {metrics['prompt_tokens']}")
-        print(f"  Generated tokens : {metrics['generated_tokens']}")
-        print(f"  Tokens/sec       : {metrics['tokens_per_second']}")
-        print(f"  Response chars   : {metrics['response_chars']}")
-        print(f"  Model switches   : {metrics['model_switch_count']}")
-        print()
+            print(f"Request {index} [{model}]")
+            print(f"  Wall clock       : {metrics['wall_clock_ms']} ms")
+            print(f"  First token      : {metrics['first_token_ms']} ms")
+            print(f"  Model load       : {metrics['load_duration_ms']} ms")
+            print(f"  Prompt eval      : {metrics['prompt_eval_duration_ms']} ms")
+            print(f"  Generation       : {metrics['eval_duration_ms']} ms")
+            print(f"  Prompt tokens    : {metrics['prompt_tokens']}")
+            print(f"  Generated tokens : {metrics['generated_tokens']}")
+            print(f"  Tokens/sec       : {metrics['tokens_per_second']}")
+            print(f"  Response chars   : {metrics['response_chars']}")
+            print(f"  Model switches   : {metrics['model_switch_count']}")
+            print(f"  Think mode       : {metrics.get('model_think')}")
+            print()
 
     print("Keep-alive:", performance_status()["keep_alive"])
     print("Context:", performance_status()["model_options"]["num_ctx"])
