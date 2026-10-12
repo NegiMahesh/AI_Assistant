@@ -529,26 +529,99 @@ def get_relevant_memories(
     query,
     limit=5
 ):
+    """
+    Retrieve explicitly requested identity facts before fuzzy keyword matches.
 
+    This prevents a compound question such as "What's my name and how old am I?"
+    from losing the age/name fact because recent unrelated memories filled the
+    keyword-search limit.
+    """
     query = str(query).strip()
 
     if not query:
-
         return []
 
-    exact_results = search_memories(
-        query,
-        limit
+    limit = max(1, int(limit))
+    lowered_query = query.lower()
+
+    asks_age = bool(
+        re.search(
+            r"\b(?:how old am i|what(?:'s|s| is) my age|what age am i|"
+            r"do you know how old i am)\b",
+            lowered_query,
+        )
+    )
+    asks_name = bool(
+        re.search(
+            r"\b(?:what(?:'s|s| is) my name|who am i|"
+            r"do you know my name|what do you call me)\b",
+            lowered_query,
+        )
     )
 
-    if exact_results:
+    targeted_results = []
+    connection = None
 
-        return exact_results
+    try:
+        if asks_age or asks_name:
+            connection = get_connection()
+            cursor = connection.cursor()
 
-    return search_memories_by_keywords(
-        query,
-        limit
-    )
+            if asks_age:
+                cursor.execute(
+                    """
+                    SELECT id, memory, category, created_at
+                    FROM memories
+                    WHERE LOWER(category) = LOWER(?)
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    ("age",),
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    targeted_results.append(dict(row))
+
+            if asks_name:
+                cursor.execute(
+                    """
+                    SELECT id, memory, category, created_at
+                    FROM memories
+                    WHERE LOWER(category) = LOWER(?)
+                      AND LOWER(memory) LIKE LOWER(?)
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    ("identity", "%name%"),
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    targeted_results.append(dict(row))
+
+    finally:
+        if connection is not None:
+            connection.close()
+
+    # Keep explicitly requested personal facts first, then add fuzzy matches.
+    fallback_results = search_memories(query, limit)
+    if not fallback_results:
+        fallback_results = search_memories_by_keywords(query, limit)
+
+    results = []
+    seen_ids = set()
+
+    for item in targeted_results + fallback_results:
+        item_id = item.get("id") if isinstance(item, dict) else None
+        if item_id is not None and item_id in seen_ids:
+            continue
+        if item_id is not None:
+            seen_ids.add(item_id)
+        results.append(item)
+
+        if len(results) >= limit:
+            break
+
+    return results
 
 
 # =========================================================
@@ -736,6 +809,7 @@ def detect_memory(text):
     age_patterns = [
         r"\bmy age is\s+(\d{1,3})\b",
         r"\bi am currently\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
+        r"\bi['’]m currently\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
         r"\bi am\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
         r"\bi['’]m\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
         r"\bi am aged\s+(\d{1,3})\b",
