@@ -153,7 +153,7 @@ def compact_history(
 
 
 def _clean_topic(topic: str) -> str:
-    topic = re.sub(r"\s+", " ", topic).strip(" \\t\\r\\n?.!,;:")
+    topic = re.sub(r"\s+", " ", topic).strip(" " + chr(9) + chr(10) + "?.!,;:")
     if len(topic) > 160:
         topic = topic[:160].rstrip() + "..."
     return topic
