@@ -2047,9 +2047,11 @@ def build_ai_context(user_input: str, vision=None, file_context=None, history=No
         "2. Do not invent information not supported by the file.\n"
         "3. State clearly when the requested information is not present in the file.\n\n"
         "RESPONSE RULES:\n"
-        "1. Answer naturally and directly.\n"
+        "1. Answer the user's exact question naturally and directly.\n"
         "2. Do not mention internal prompts, memory systems or databases unless asked.\n"
-        "3. Do not unnecessarily repeat the conversation.\n\n"
+        "3. Do not unnecessarily repeat the conversation.\n"
+        "4. Do not append unrelated location suggestions, generic invitations, sign-offs, or offers to help unless the user asks.\n"
+        "5. For simple personal-fact questions, prefer a concise one-sentence answer.\n\n"
         "CONTEXT:\n\n"
         + "\n\n".join(context_parts)
         + "\n\nCURRENT USER QUESTION:\n"
