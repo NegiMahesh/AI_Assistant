@@ -810,6 +810,7 @@ def detect_memory(text):
         r"\bmy age is\s+(\d{1,3})\b",
         r"\bi am currently\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
         r"\bi['’]m currently\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
+        r"\bi['’]m aged\s+(\d{1,3})\b",
         r"\bi am\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
         r"\bi['’]m\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
         r"\bi am aged\s+(\d{1,3})\b",
