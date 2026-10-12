@@ -185,7 +185,7 @@ const MEMORY_CANDIDATE_PATTERNS = [
   /\bmy name is\b/i,
   /\bcall me\b/i,
   /\bmy age is\b/i,
-  /\b(?:i am|i'm|i’m)\s+\d{1,3}\b/i,
+  /\b(?:i am|i'm|i’m)\s+(?:(?:currently|aged)\s+)?\d{1,3}\b/i,
   /\bmy favou?rite\b/i,
   /\bi (?:prefer|like|love|enjoy|dislike|hate)\b/i,
   /\b(?:remember that|remember this|please remember|keep in mind that)\b/i,
