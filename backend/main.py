@@ -194,6 +194,8 @@ MAX_HISTORY_MESSAGES = 12
 MAX_PROMPT_HISTORY_MESSAGES = 8
 MAX_PROMPT_HISTORY_CHARS = 6000
 MAX_PROMPT_MESSAGE_CHARS = 1200
+MAX_MEMORY_HISTORY_MESSAGES = 300
+MAX_MEMORY_CANDIDATE_CHARS = 1000
 
 
 # =========================================================
@@ -217,6 +219,10 @@ class ChatRequest(BaseModel):
     file_context: str | None = None
 
     history: list[ChatMessage] = Field(default_factory=list)
+
+    # Candidate user statements recovered from the frontend's saved chats.
+    # These are used only to backfill local persistent memory, never as prompt history.
+    memory_history: list[str] = Field(default_factory=list)
 
 
 class SpeakRequest(BaseModel):
@@ -2230,6 +2236,26 @@ def assistant(request: ChatRequest):
     if not user_input:
 
         return {"success": False, "error": "Empty message"}
+
+    # Backfill recognizable user facts from older frontend conversations.
+    # This repairs facts such as age statements that older memory detectors missed.
+    for memory_candidate in request.memory_history[-MAX_MEMORY_HISTORY_MESSAGES:]:
+
+        if not isinstance(memory_candidate, str):
+
+            continue
+
+        candidate_text = memory_candidate.strip()[:MAX_MEMORY_CANDIDATE_CHARS]
+
+        if candidate_text:
+
+            try:
+
+                process_memory(candidate_text)
+
+            except Exception as error:
+
+                print("Historical memory backfill error:", error)
 
     memory_result = process_memory(user_input)
 
