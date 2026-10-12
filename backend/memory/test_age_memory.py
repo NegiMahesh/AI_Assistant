@@ -39,6 +39,16 @@ class TestPhase21AgeMemory(unittest.TestCase):
         self.assertEqual(result["category"], "age")
         self.assertIn("20 years old", result["memory"])
 
+    def test_age_statement_with_im_currently_is_detected(self):
+        result = detect_memory("I'm currently 20 years old")
+        self.assertEqual(result["category"], "age")
+        self.assertIn("20 years old", result["memory"])
+
+    def test_age_statement_with_im_aged_is_detected(self):
+        result = detect_memory("I'm aged 20")
+        self.assertEqual(result["category"], "age")
+        self.assertIn("20 years old", result["memory"])
+
     def test_age_out_of_range_is_not_saved(self):
         self.assertIsNone(detect_memory("I am 150 years old"))
 
