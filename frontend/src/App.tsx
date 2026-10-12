@@ -181,6 +181,55 @@ function saveConversations(
 }
 
 
+const MEMORY_CANDIDATE_PATTERNS = [
+  /\bmy name is\b/i,
+  /\bcall me\b/i,
+  /\bmy age is\b/i,
+  /\b(?:i am|i'm|i’m)\s+\d{1,3}\b/i,
+  /\bmy favou?rite\b/i,
+  /\bi (?:prefer|like|love|enjoy|dislike|hate)\b/i,
+  /\b(?:remember that|remember this|please remember|keep in mind that)\b/i,
+  /\b(?:i study|i am studying|i'm studying|i live in|i'm from|i am from|i work as)\b/i,
+];
+
+function collectMemoryHistory(
+  conversations: StoredConversation[],
+  currentConversationId: string,
+  currentMessages: Message[]
+): string[] {
+  const allUserMessages = conversations
+    .map((conversation) => ({
+      ...conversation,
+      messages:
+        conversation.id === currentConversationId
+          ? currentMessages
+          : conversation.messages,
+    }))
+    .flatMap((conversation) =>
+      conversation.messages
+        .filter(
+          (message) =>
+            message.role === "user" &&
+            message.content.trim()
+        )
+        .map((message) => ({
+          id: message.id,
+          content: message.content.trim(),
+        }))
+    )
+    .sort((a, b) => a.id - b.id);
+
+  return allUserMessages
+    .filter((message) =>
+      MEMORY_CANDIDATE_PATTERNS.some((pattern) =>
+        pattern.test(message.content)
+      )
+    )
+    .map((message) => message.content.slice(0, 1000))
+    .slice(-300);
+}
+
+
 function makeConversationTitle(
   messages: Message[]
 ): string {
@@ -1015,6 +1064,14 @@ function App() {
           })
         );
 
+    // Recover explicit personal facts from saved chats. This is sent only
+    // to the backend memory detector, not included in Ollama's prompt history.
+    const memoryHistory = collectMemoryHistory(
+      conversations,
+      currentConversationId,
+      messages
+    );
+
     const userMessage: Message = {
       id:
         Date.now(),
@@ -1094,7 +1151,9 @@ function App() {
                       : message
                 )
             );
-          }
+          },
+
+          memoryHistory
         );
 
       if (
