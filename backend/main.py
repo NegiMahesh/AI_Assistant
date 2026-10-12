@@ -693,6 +693,9 @@ def is_personal_memory_question(text: str):
 
     patterns = [
         r"\bwhat('?s| is) my name\b",
+        r"\bhow old am i\b",
+        r"\bwhat('?s| is) my age\b",
+        r"\bdo you know how old i am\b",
         r"\bwho am i\b",
         r"\bdo you know my name\b",
         r"\bwhat do you call me\b",
@@ -1950,7 +1953,9 @@ def build_ai_context(user_input: str, vision=None, file_context=None, history=No
                 "CONVERSATION HISTORY:\n" + "\n".join(conversation_lines)
             )
 
-    memory_context = build_memory_context(user_input)
+    # build_memory_context expects saved memory records, not the raw query
+    # string (which would otherwise be iterated character by character).
+    memory_context = build_memory_context(get_recent_memories(10))
 
     if memory_context:
 
