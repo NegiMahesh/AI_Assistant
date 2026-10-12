@@ -69,6 +69,14 @@ class TestPhase21AgeMemory(unittest.TestCase):
         memory_store.process_memory("My name is Mahesh.")
         memory_store.process_memory("I am currently 20 years old.")
 
+        # These newer memories match the broad "am" keyword and would crowd
+        # both requested identity facts out of the old recency-only search.
+        for index in range(10):
+            memory_store.save_memory(
+                f"I am working on unrelated project {index}",
+                "general",
+            )
+
         memories = memory_store.get_relevant_memories(
             "Now tell me whats my name and how old am I",
             limit=5,
