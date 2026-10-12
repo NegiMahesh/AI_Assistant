@@ -129,6 +129,49 @@ def save_or_update_memory(
         cursor = connection.cursor()
 
         # -------------------------------------------------
+        # UPDATE A KNOWN AGE FACT IN PLACE
+        # -------------------------------------------------
+
+        # Age changes over time. Keep one canonical age fact so retrieval
+        # cannot return conflicting ages from older conversations.
+        if (
+            category.lower() == "identity"
+            and re.fullmatch(
+                r"The user's age is (\d{1,3}) years old\.",
+                memory,
+                re.IGNORECASE,
+            )
+        ):
+            cursor.execute(
+                """
+                SELECT id
+                FROM memories
+                WHERE LOWER(category) = LOWER(?)
+                  AND LOWER(memory) LIKE LOWER(?)
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                ("identity", "The user's age is %"),
+            )
+            existing_age = cursor.fetchone()
+
+            if existing_age:
+                created_at = datetime.now().isoformat(timespec="seconds")
+                cursor.execute(
+                    """
+                    UPDATE memories
+                    SET memory = ?, created_at = ?
+                    WHERE id = ?
+                    """,
+                    (memory, created_at, existing_age["id"]),
+                )
+                connection.commit()
+                return {
+                    "action": "updated",
+                    "id": existing_age["id"],
+                }
+
+        # -------------------------------------------------
         # EXACT MATCH
         # -------------------------------------------------
 
@@ -687,6 +730,34 @@ def detect_memory(text):
         ):
 
             return None
+
+    # =====================================================
+    # AGE / PERSONAL IDENTITY
+    # =====================================================
+
+    # Detect common numeric age statements before the broader name patterns.
+    # Supported examples: "I am 20", "I'm 20 years old", "my age is 20".
+    age_patterns = [
+        r"\bmy age is\s+(\d{1,3})\b",
+        (
+            r"\b(?:i am|i'm|im)\s+(\d{1,3})"
+            r"(?:\s*-?\s*(?:years?|yrs?)(?:\s*old)?"
+            r"|(?=\s*[,.;!?]|$))"
+        ),
+    ]
+
+    for pattern in age_patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+
+        if match:
+            age = int(match.group(1))
+
+            # Reject implausible values instead of storing them as age.
+            if 0 <= age <= 130:
+                return {
+                    "memory": f"The user's age is {age} years old.",
+                    "category": "identity",
+                }
 
     # =====================================================
     # NAME
