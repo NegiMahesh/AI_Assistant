@@ -468,31 +468,38 @@ export default function CameraPanel({
       }
 
 
-      const yoloPromise =
-        detectObjects(
+      /*
+       * Object detection and face recognition are independent.
+       * A face-recognition failure must not hide working YOLO results.
+       */
+      let yoloData: Awaited<ReturnType<typeof detectObjects>> | null = null;
+      let faceData: Awaited<ReturnType<typeof recognizeFaces>> | null = null;
+      let faceError = false;
+
+      try {
+        yoloData = await detectObjects(
           blob,
           DETECTION_CONFIDENCE
         );
-
-      const facePromise = runFaceDetection
-        ? recognizeFaces(blob)
-        : Promise.resolve({ faces: [] });
-
-      const [yoloData, faceData] =
-        await Promise.all([
-          yoloPromise,
-          facePromise,
-        ]);
+      } catch (error) {
+        console.error("Object detection error:", error);
+      }
 
       if (runFaceDetection) {
-        lastFaceDetectionRef.current = performance.now();
+        try {
+          faceData = await recognizeFaces(blob);
+          lastFaceDetectionRef.current = performance.now();
+        } catch (error) {
+          faceError = true;
+          console.error("Face recognition error:", error);
+        }
       }
 
       const newDetections =
-        yoloData.detections || [];
+        yoloData?.detections || [];
 
       const newFaces =
-        runFaceDetection
+        runFaceDetection && faceData
           ? faceData.faces || []
           : faces;
 
@@ -580,21 +587,33 @@ export default function CameraPanel({
       }
 
 
-      setCameraStatus(
-        parts.length
-          ? `🟢 ${parts.join(
-              " · "
-            )}`
-          : "🟢 Monitoring scene"
-      );
+      if (yoloData) {
+        setCameraStatus(
+          faceError
+            ? "🟢 Object detection active · Face recognition unavailable"
+            : parts.length
+              ? `🟢 ${parts.join(
+                  " · "
+                )}`
+              : "🟢 Monitoring scene"
+        );
+      } else if (faceError) {
+        setCameraStatus(
+          "⚠️ Vision detection unavailable"
+        );
+      } else {
+        setCameraStatus(
+          "⚠️ Object detection unavailable"
+        );
+      }
 
 
       drawDetections(
         newDetections,
         newFaces,
-        yoloData.width ||
+        yoloData?.width ||
           video.videoWidth,
-        yoloData.height ||
+        yoloData?.height ||
           video.videoHeight
       );
 

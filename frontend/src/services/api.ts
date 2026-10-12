@@ -113,7 +113,8 @@ export async function sendAssistantMessage(
   fileContext: string | null = null,
   history: ConversationMessage[] = [],
   signal?: AbortSignal,
-  onChunk?: (chunk: string) => void
+  onChunk?: (chunk: string) => void,
+  memoryHistory: string[] = []
 ): Promise<AssistantResponse> {
 
   const recentHistory =
@@ -141,6 +142,9 @@ export async function sendAssistantMessage(
 
           history:
             recentHistory,
+
+          memory_history:
+            memoryHistory.slice(-300),
         }),
 
         signal,
