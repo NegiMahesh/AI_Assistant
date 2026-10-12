@@ -1010,15 +1010,18 @@ function App() {
      SEND MESSAGE
   ======================================================= */
 
-  async function handleSend() {
+  async function handleSend(
+    voiceText?: string,
+    speakResponse = false
+  ) {
     const text =
-      messageInput.trim();
+      (voiceText ?? messageInput).trim();
 
     if (
       !text ||
       isThinking ||
       fileLoading ||
-      isTranscribing
+      (isTranscribing && !voiceText)
     ) {
       return;
     }
@@ -1042,6 +1045,10 @@ function App() {
           },
         ]
       );
+
+      if (speakResponse) {
+        setVoiceStatus("❌ Assistant backend is offline");
+      }
 
       return;
     }
@@ -1176,6 +1183,17 @@ function App() {
                   : message
             )
         );
+
+        if (speakResponse) {
+          setVoiceStatus("🔊 Speaking response...");
+          await handleSpeak(
+            thinkingId,
+            response.response,
+            true
+          );
+        }
+      } else if (speakResponse) {
+        setVoiceStatus("⚠️ The assistant returned no spoken response");
       }
     } catch (error) {
       if (
@@ -1230,6 +1248,10 @@ function App() {
                 : message
           )
       );
+
+      if (speakResponse) {
+        setVoiceStatus("❌ Voice request failed");
+      }
 
       void checkBackend();
     } finally {
@@ -1342,30 +1364,22 @@ function App() {
                 blob
               );
 
-            if (
-              text.trim()
-            ) {
-              setMessageInput(
-                text.trim()
-              );
+            if (text.trim()) {
+              const transcript = text.trim();
 
-              setVoiceStatus(
-                "✅ Speech converted"
-              );
+              setMessageInput(transcript);
+              setVoiceStatus("🧠 Processing your request...");
+
+              // Complete the full voice turn: transcribe, route, answer, then speak.
+              await handleSend(transcript, true);
             } else {
-              setVoiceStatus(
-                "⚠️ No speech detected"
+              setVoiceStatus("⚠️ No speech detected");
+
+              window.setTimeout(
+                () => setVoiceStatus(""),
+                1800
               );
             }
-
-            window.setTimeout(
-              () => {
-                setVoiceStatus(
-                  ""
-                );
-              },
-              1800
-            );
           } catch (error) {
             console.error(
               "Transcription error:",
@@ -1467,7 +1481,8 @@ function App() {
 
   async function handleSpeak(
     messageId: number,
-    text: string
+    text: string,
+    voiceTurn = false
   ) {
     if (!text.trim()) {
       return;
@@ -1515,6 +1530,11 @@ function App() {
 
           currentAudioRef.current =
             null;
+
+          if (voiceTurn) {
+            setVoiceStatus("✅ Voice reply finished");
+            window.setTimeout(() => setVoiceStatus(""), 2200);
+          }
         };
 
       audio.onerror =
@@ -1525,6 +1545,11 @@ function App() {
 
           currentAudioRef.current =
             null;
+
+          if (voiceTurn) {
+            setVoiceStatus("❌ Audio playback failed");
+            window.setTimeout(() => setVoiceStatus(""), 3000);
+          }
         };
 
       await audio.play();
@@ -1540,6 +1565,11 @@ function App() {
 
       currentAudioRef.current =
         null;
+
+      if (voiceTurn) {
+        setVoiceStatus("❌ Could not play the voice response");
+        window.setTimeout(() => setVoiceStatus(""), 3000);
+      }
     }
   }
 
