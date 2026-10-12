@@ -129,6 +129,47 @@ def save_or_update_memory(
         cursor = connection.cursor()
 
         # -------------------------------------------------
+        # UPDATE THE SINGLE CURRENT AGE FACT
+        # -------------------------------------------------
+
+        if category.lower() == "age":
+
+            cursor.execute(
+                """
+                SELECT id
+                FROM memories
+                WHERE LOWER(category) = LOWER(?)
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (category,)
+            )
+
+            existing_age = cursor.fetchone()
+
+            if existing_age:
+
+                cursor.execute(
+                    """
+                    UPDATE memories
+                    SET memory = ?, created_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        memory,
+                        datetime.now().isoformat(timespec="seconds"),
+                        existing_age["id"]
+                    )
+                )
+
+                connection.commit()
+
+                return {
+                    "action": "updated",
+                    "id": existing_age["id"]
+                }
+
+        # -------------------------------------------------
         # EXACT MATCH
         # -------------------------------------------------
 
@@ -687,6 +728,37 @@ def detect_memory(text):
         ):
 
             return None
+
+    # =====================================================
+    # AGE
+    # =====================================================
+
+    age_patterns = [
+        r"\bmy age is\s+(\d{1,3})\b",
+        r"\bi am currently\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
+        r"\bi am\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
+        r"\bi['’]m\s+(\d{1,3})(?:\s*[- ]?year[- ]old|\s+years?\s+(?:old|of age))?\b",
+        r"\bi am aged\s+(\d{1,3})\b",
+    ]
+
+    for pattern in age_patterns:
+
+        match = re.search(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+
+        if match:
+
+            age = int(match.group(1))
+
+            if 1 <= age <= 120:
+
+                return {
+                    "memory": f"The user's age is {age} years old.",
+                    "category": "age"
+                }
 
     # =====================================================
     # NAME
