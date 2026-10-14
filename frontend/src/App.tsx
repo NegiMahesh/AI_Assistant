@@ -1060,6 +1060,9 @@ function App() {
 
       if (speakResponse) {
         setVoiceStatus("❌ Assistant backend is offline");
+        if (conversationModeRef.current) {
+          resumeConversationListening();
+        }
       }
 
       return;
@@ -1206,6 +1209,9 @@ function App() {
         }
       } else if (speakResponse) {
         setVoiceStatus("⚠️ The assistant returned no spoken response");
+        if (conversationModeRef.current) {
+          resumeConversationListening();
+        }
       }
     } catch (error) {
       if (
@@ -1231,6 +1237,10 @@ function App() {
                   : message
             )
         );
+
+        if (speakResponse && conversationModeRef.current) {
+          resumeConversationListening();
+        }
 
         return;
       }
@@ -1263,6 +1273,13 @@ function App() {
 
       if (speakResponse) {
         setVoiceStatus("❌ Voice request failed");
+        if (conversationModeRef.current) {
+          window.setTimeout(() => {
+            if (conversationModeRef.current) {
+              resumeConversationListening();
+            }
+          }, 1000);
+        }
       }
 
       void checkBackend();
@@ -1441,12 +1458,20 @@ function App() {
             await handleSendRef.current?.(transcript, true);
           } else {
             setVoiceStatus("⚠️ No speech detected");
-            window.setTimeout(() => setVoiceStatus(""), 1800);
+            if (conversationModeRef.current) {
+              resumeConversationListening();
+            } else {
+              window.setTimeout(() => setVoiceStatus(""), 1800);
+            }
           }
         } catch (error) {
           console.error("Transcription error:", error);
           setVoiceStatus("❌ Transcription failed");
-          window.setTimeout(() => setVoiceStatus(""), 2200);
+          if (conversationModeRef.current) {
+            resumeConversationListening();
+          } else {
+            window.setTimeout(() => setVoiceStatus(""), 2200);
+          }
         } finally {
           setIsTranscribing(false);
         }
