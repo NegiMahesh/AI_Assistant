@@ -464,6 +464,10 @@ function App() {
     useState(false);
 
 
+  const [isConversationMode, setIsConversationMode] =
+    useState(false);
+
+
   /* =======================================================
      TTS
   ======================================================= */
@@ -544,6 +548,10 @@ function App() {
     useRef<AbortController | null>(
       null
     );
+
+
+  const conversationModeRef =
+    useRef(false);
 
 
   /* =======================================================
@@ -1278,8 +1286,54 @@ function App() {
      VOICE RECORDING
   ======================================================= */
 
+  function toggleConversationMode() {
+    if (conversationModeRef.current) {
+      conversationModeRef.current = false;
+      setIsConversationMode(false);
+
+      if (mediaRecorderRef.current?.state === "recording") {
+        setVoiceStatus("🧠 Finishing the current recording...");
+        stopRecording();
+      } else {
+        setVoiceStatus("Conversation mode stopped");
+        window.setTimeout(() => setVoiceStatus(""), 1800);
+      }
+
+      return;
+    }
+
+    if (backendConnection !== "online") {
+      setVoiceStatus("❌ Start the backend before using conversation mode");
+      window.setTimeout(() => setVoiceStatus(""), 2500);
+      return;
+    }
+
+    if (
+      isRecording ||
+      isThinking ||
+      isTranscribing ||
+      fileLoading ||
+      speakingMessageId !== null
+    ) {
+      setVoiceStatus("Finish the current action before starting conversation mode");
+      window.setTimeout(() => setVoiceStatus(""), 2500);
+      return;
+    }
+
+    conversationModeRef.current = true;
+    setIsConversationMode(true);
+    setVoiceStatus("🎤 Starting hands-free conversation...");
+    void startRecording();
+  }
+
+
+  /* =======================================================
+     VOICE RECORDING + LOCAL VOICE ACTIVITY DETECTION
+  ======================================================= */
+
   async function startRecording() {
     if (
+      mediaRecorderRef.current ||
       isRecording ||
       isThinking ||
       isTranscribing ||
@@ -1288,144 +1342,174 @@ function App() {
       return;
     }
 
+    let stream: MediaStream | null = null;
+    let audioContext: AudioContext | null = null;
+
     try {
-      const stream =
-        await navigator
-          .mediaDevices
-          .getUserMedia({
-            audio: true,
-          });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
 
-      let mimeType =
-        "audio/webm";
+      const recordingStream = stream;
+      let analyser: AnalyserNode | null = null;
+      let sourceNode: MediaStreamAudioSourceNode | null = null;
+      let vadIntervalId: number | null = null;
+      let vadBuffer = new Float32Array(0);
+      let voiceCandidateSince = 0;
+      let lastSpeechAt = 0;
+      let speechDetected = false;
 
-      if (
-        !MediaRecorder.isTypeSupported(
-          mimeType
-        )
-      ) {
-        mimeType =
-          "audio/webm;codecs=opus";
+      let mimeType = "audio/webm";
+
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "audio/webm;codecs=opus";
       }
 
-      const recorder =
-        new MediaRecorder(
-          stream,
-          {
-            mimeType,
-          }
-        );
+      const recorder = new MediaRecorder(recordingStream, {
+        mimeType,
+      });
 
-      audioChunksRef.current =
-        [];
+      if (conversationModeRef.current) {
+        audioContext = new AudioContext();
+        await audioContext.resume();
 
-      recorder.ondataavailable =
-        (event) => {
-          if (
-            event.data.size >
-            0
-          ) {
-            audioChunksRef.current.push(
-              event.data
-            );
-          }
-        };
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 1024;
 
-      recorder.onstop =
-        async () => {
-          stream
-            .getTracks()
-            .forEach(
-              (track) =>
-                track.stop()
-            );
+        sourceNode = audioContext.createMediaStreamSource(recordingStream);
+        sourceNode.connect(analyser);
 
-          const blob =
-            new Blob(
-              audioChunksRef.current,
-              {
-                type:
-                  recorder.mimeType ||
-                  "audio/webm",
-              }
-            );
+        vadBuffer = new Float32Array(analyser.fftSize);
+      }
 
-          setIsTranscribing(
-            true
-          );
+      audioChunksRef.current = [];
 
-          setVoiceStatus(
-            "🧠 Converting speech to text..."
-          );
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
 
+      recorder.onstop = async () => {
+        if (vadIntervalId !== null) {
+          window.clearInterval(vadIntervalId);
+          vadIntervalId = null;
+        }
+
+        recordingStream.getTracks().forEach((track) => track.stop());
+        sourceNode?.disconnect();
+
+        if (audioContext && audioContext.state !== "closed") {
           try {
-            const text =
-              await transcribeAudio(
-                blob
-              );
-
-            if (text.trim()) {
-              const transcript = text.trim();
-
-              setMessageInput(transcript);
-              setVoiceStatus("🧠 Processing your request...");
-
-              // Complete the full voice turn: transcribe, route, answer, then speak.
-              await handleSend(transcript, true);
-            } else {
-              setVoiceStatus("⚠️ No speech detected");
-
-              window.setTimeout(
-                () => setVoiceStatus(""),
-                1800
-              );
-            }
+            await audioContext.close();
           } catch (error) {
-            console.error(
-              "Transcription error:",
-              error
-            );
-
-            setVoiceStatus(
-              "❌ Transcription failed"
-            );
-
-            window.setTimeout(
-              () => {
-                setVoiceStatus(
-                  ""
-                );
-              },
-              2200
-            );
-          } finally {
-            setIsTranscribing(
-              false
-            );
+            console.debug("AudioContext cleanup:", error);
           }
-        };
+        }
+
+        setIsRecording(false);
+
+        const blob = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+
+        setIsTranscribing(true);
+        setVoiceStatus("🧠 Converting speech to text...");
+
+        try {
+          const text = await transcribeAudio(blob);
+
+          if (text.trim()) {
+            const transcript = text.trim();
+
+            setMessageInput(transcript);
+            setVoiceStatus("🧠 Processing your request...");
+
+            // Keep the existing router, assistant response, and Piper TTS flow.
+            await handleSend(transcript, true);
+          } else {
+            setVoiceStatus("⚠️ No speech detected");
+            window.setTimeout(() => setVoiceStatus(""), 1800);
+          }
+        } catch (error) {
+          console.error("Transcription error:", error);
+          setVoiceStatus("❌ Transcription failed");
+          window.setTimeout(() => setVoiceStatus(""), 2200);
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
 
       recorder.start();
 
-      mediaRecorderRef.current =
-        recorder;
-
-      setIsRecording(
-        true
-      );
-
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
       setVoiceStatus(
-        "🎤 Listening..."
-      );
-    } catch (error) {
-      console.error(
-        "Microphone error:",
-        error
+        conversationModeRef.current
+          ? "🎤 Listening... speak naturally, then pause to send"
+          : "🎤 Listening..."
       );
 
-      alert(
-        "Microphone access failed. Please allow microphone permission."
-      );
+      // Detect a complete utterance locally: sustained speech followed by
+      // 1.2 seconds of silence. Audio is only uploaded when recording stops.
+      if (analyser) {
+        vadIntervalId = window.setInterval(() => {
+          if (
+            !conversationModeRef.current ||
+            recorder.state !== "recording" ||
+            !analyser
+          ) {
+            return;
+          }
+
+          analyser.getFloatTimeDomainData(vadBuffer);
+
+          let energy = 0;
+
+          for (let i = 0; i < vadBuffer.length; i += 1) {
+            energy += vadBuffer[i] * vadBuffer[i];
+          }
+
+          const rms = Math.sqrt(energy / vadBuffer.length);
+          const now = Date.now();
+
+          if (rms > 0.025) {
+            if (voiceCandidateSince === 0) {
+              voiceCandidateSince = now;
+            }
+
+            if (now - voiceCandidateSince >= 180) {
+              speechDetected = true;
+              lastSpeechAt = now;
+            }
+          } else {
+            voiceCandidateSince = 0;
+          }
+
+          if (speechDetected && now - lastSpeechAt >= 1200) {
+            stopRecording();
+          }
+        }, 50);
+      }
+    } catch (error) {
+      console.error("Microphone error:", error);
+
+      stream?.getTracks().forEach((track) => track.stop());
+
+      if (audioContext && audioContext.state !== "closed") {
+        void audioContext.close().catch((closeError) => {
+          console.debug("AudioContext cleanup:", closeError);
+        });
+      }
+
+      if (conversationModeRef.current) {
+        conversationModeRef.current = false;
+        setIsConversationMode(false);
+      }
+
+      setVoiceStatus("❌ Microphone access failed");
+      alert("Microphone access failed. Please allow microphone permission.");
+      window.setTimeout(() => setVoiceStatus(""), 2500);
     }
   }
 
@@ -1472,6 +1556,25 @@ function App() {
     } else {
       void startRecording();
     }
+  }
+
+
+  function resumeConversationListening() {
+    if (!conversationModeRef.current) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      if (
+        !conversationModeRef.current ||
+        mediaRecorderRef.current
+      ) {
+        return;
+      }
+
+      setVoiceStatus("🎤 Listening for your next request...");
+      void startRecording();
+    }, 500);
   }
 
 
@@ -1532,8 +1635,13 @@ function App() {
             null;
 
           if (voiceTurn) {
-            setVoiceStatus("✅ Voice reply finished");
-            window.setTimeout(() => setVoiceStatus(""), 2200);
+            if (conversationModeRef.current) {
+              setVoiceStatus("✅ Reply finished · Listening again...");
+              resumeConversationListening();
+            } else {
+              setVoiceStatus("✅ Voice reply finished");
+              window.setTimeout(() => setVoiceStatus(""), 2200);
+            }
           }
         };
 
@@ -1547,8 +1655,13 @@ function App() {
             null;
 
           if (voiceTurn) {
-            setVoiceStatus("❌ Audio playback failed");
-            window.setTimeout(() => setVoiceStatus(""), 3000);
+            if (conversationModeRef.current) {
+              setVoiceStatus("⚠️ Audio playback failed · Listening again...");
+              resumeConversationListening();
+            } else {
+              setVoiceStatus("❌ Audio playback failed");
+              window.setTimeout(() => setVoiceStatus(""), 3000);
+            }
           }
         };
 
@@ -1567,8 +1680,17 @@ function App() {
         null;
 
       if (voiceTurn) {
-        setVoiceStatus("❌ Could not play the voice response");
-        window.setTimeout(() => setVoiceStatus(""), 3000);
+        if (conversationModeRef.current) {
+          setVoiceStatus("⚠️ Could not play response · Listening again...");
+          window.setTimeout(() => {
+            if (conversationModeRef.current) {
+              resumeConversationListening();
+            }
+          }, 1000);
+        } else {
+          setVoiceStatus("❌ Could not play the voice response");
+          window.setTimeout(() => setVoiceStatus(""), 3000);
+        }
       }
     }
   }
@@ -1959,6 +2081,7 @@ function App() {
   useEffect(() => {
     return () => {
       requestControllerRef.current?.abort();
+      conversationModeRef.current = false;
 
       if (
         mediaRecorderRef.current &&
@@ -2375,6 +2498,40 @@ function App() {
           />
 
 
+          {/* HANDS-FREE CONVERSATION MODE */}
+
+          <button
+            className={
+              `composer-icon conversation-control ${isConversationMode ? "active" : ""}`
+            }
+            type="button"
+            title={
+              isConversationMode
+                ? "Stop hands-free conversation"
+                : "Start hands-free conversation"
+            }
+            aria-label={
+              isConversationMode
+                ? "Stop hands-free conversation"
+                : "Start hands-free conversation"
+            }
+            aria-pressed={isConversationMode}
+            onClick={toggleConversationMode}
+            disabled={
+              !isConversationMode &&
+              (
+                isRecording ||
+                isThinking ||
+                isTranscribing ||
+                fileLoading ||
+                speakingMessageId !== null
+              )
+            }
+          >
+            🔁
+          </button>
+
+
           {/* MICROPHONE */}
 
           <button
@@ -2401,7 +2558,8 @@ function App() {
             disabled={
               isThinking ||
               isTranscribing ||
-              fileLoading
+              fileLoading ||
+              isConversationMode
             }
           >
 
@@ -2507,12 +2665,21 @@ function App() {
 
               ? "Generating response · Click ■ to stop"
 
-              : isRecording
+              : isTranscribing
 
-                ? "🎤 Listening..."
+                ? "🧠 Converting speech to text..."
 
-                : backendConnection ===
-                  "offline"
+                : isRecording
+
+                  ? isConversationMode
+                    ? "🎤 Hands-free listening · Pause briefly when you finish speaking"
+                    : "🎤 Listening..."
+
+                  : isConversationMode
+                    ? "Hands-free mode on · Speak naturally; a pause sends your request"
+
+                    : backendConnection ===
+                      "offline"
 
                   ? "Backend offline · Start FastAPI to continue"
 
