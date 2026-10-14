@@ -554,6 +554,10 @@ function App() {
     useRef(false);
 
 
+  const handleSendRef =
+    useRef<((voiceText?: string, speakResponse?: boolean) => Promise<void>) | null>(null);
+
+
   /* =======================================================
      CURRENT CONVERSATION FIX
   ======================================================= */
@@ -1272,6 +1276,9 @@ function App() {
     }
   }
 
+  // Refresh the handler reference so later voice turns use current chat state.
+  handleSendRef.current = handleSend;
+
 
   /* =======================================================
      STOP GENERATION
@@ -1331,13 +1338,18 @@ function App() {
      VOICE RECORDING + LOCAL VOICE ACTIVITY DETECTION
   ======================================================= */
 
-  async function startRecording() {
+  async function startRecording(automaticRestart = false) {
     if (
       mediaRecorderRef.current ||
-      isRecording ||
-      isThinking ||
-      isTranscribing ||
-      fileLoading
+      (
+        !automaticRestart &&
+        (
+          isRecording ||
+          isThinking ||
+          isTranscribing ||
+          fileLoading
+        )
+      )
     ) {
       return;
     }
@@ -1426,7 +1438,7 @@ function App() {
             setVoiceStatus("🧠 Processing your request...");
 
             // Keep the existing router, assistant response, and Piper TTS flow.
-            await handleSend(transcript, true);
+            await handleSendRef.current?.(transcript, true);
           } else {
             setVoiceStatus("⚠️ No speech detected");
             window.setTimeout(() => setVoiceStatus(""), 1800);
@@ -1573,7 +1585,7 @@ function App() {
       }
 
       setVoiceStatus("🎤 Listening for your next request...");
-      void startRecording();
+      void startRecording(true);
     }, 500);
   }
 
