@@ -2928,15 +2928,22 @@ async def transcribe(file: UploadFile = File(...)):
         temp_path = temp_file.name
 
     try:
+        print(f"[STT] Received audio upload: {file.filename or 'recording'}")
 
-        text = transcribe_audio(temp_path)
+        # Qwen inference is synchronous and CPU-intensive. Run it in a worker
+        # thread so the ASGI event loop can continue serving /status and other
+        # requests while transcription is running.
+        text = await asyncio.to_thread(transcribe_audio, temp_path)
 
+        print(f"[STT] Transcription completed ({len(text)} characters)")
         return {"text": text}
 
+    except Exception as error:
+        print(f"[STT] Transcription failed: {error}")
+        raise
+
     finally:
-
         if os.path.exists(temp_path):
-
             os.remove(temp_path)
 
 
