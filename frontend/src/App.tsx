@@ -1622,7 +1622,11 @@ function App() {
         const converted = new Int16Array(resampled.length);
 
         for (let i = 0; i < resampled.length; i += 1) {
-          const sample = Math.max(-1, Math.min(1, resampled[i]));
+          // The browser microphone was reaching the detector at a very low
+          // level. Apply modest local gain before int16 conversion; clamp to
+          // the valid PCM range to prevent overflow/clipping.
+          const amplified = resampled[i] * 6;
+          const sample = Math.max(-1, Math.min(1, amplified));
           converted[i] = sample < 0
             ? Math.round(sample * 32768)
             : Math.round(sample * 32767);
