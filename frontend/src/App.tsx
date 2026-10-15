@@ -468,6 +468,10 @@ function App() {
     useState(false);
 
 
+  const [isWakeWordActive, setIsWakeWordActive] =
+    useState(false);
+
+
   /* =======================================================
      TTS
   ======================================================= */
@@ -552,6 +556,30 @@ function App() {
 
   const conversationModeRef =
     useRef(false);
+
+
+  const wakeWordActiveRef =
+    useRef(false);
+
+
+  const wakeSocketRef =
+    useRef<WebSocket | null>(null);
+
+
+  const wakeMediaStreamRef =
+    useRef<MediaStream | null>(null);
+
+
+  const wakeAudioContextRef =
+    useRef<AudioContext | null>(null);
+
+
+  const wakeSourceRef =
+    useRef<MediaStreamAudioSourceNode | null>(null);
+
+
+  const wakeProcessorRef =
+    useRef<ScriptProcessorNode | null>(null);
 
 
   const handleSendRef =
@@ -1309,6 +1337,336 @@ function App() {
   /* =======================================================
      VOICE RECORDING
   ======================================================= */
+
+  /* =======================================================
+     PHASE 22.3 — LOCAL WAKE-WORD MODE
+  ======================================================= */
+
+  function releaseWakeWordResources() {
+    const processor = wakeProcessorRef.current;
+    wakeProcessorRef.current = null;
+
+    if (processor) {
+      processor.onaudioprocess = null;
+      try {
+        processor.disconnect();
+      } catch {
+        /* Already disconnected. */
+      }
+    }
+
+    const source = wakeSourceRef.current;
+    wakeSourceRef.current = null;
+
+    if (source) {
+      try {
+        source.disconnect();
+      } catch {
+        /* Already disconnected. */
+      }
+    }
+
+    const stream = wakeMediaStreamRef.current;
+    wakeMediaStreamRef.current = null;
+    stream?.getTracks().forEach((track) => track.stop());
+
+    const context = wakeAudioContextRef.current;
+    wakeAudioContextRef.current = null;
+
+    if (context && context.state !== "closed") {
+      void context.close().catch((error) => {
+        console.debug("Wake-word AudioContext cleanup:", error);
+      });
+    }
+
+    const socket = wakeSocketRef.current;
+    wakeSocketRef.current = null;
+
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      try {
+        socket.close(1000, "Wake-word mode stopped");
+      } catch {
+        /* Socket may already be closing. */
+      }
+    }
+  }
+
+
+  function stopWakeWordMode(showStatus = true) {
+    wakeWordActiveRef.current = false;
+    setIsWakeWordActive(false);
+    releaseWakeWordResources();
+
+    if (showStatus) {
+      setVoiceStatus("Wake-word standby stopped");
+      window.setTimeout(() => setVoiceStatus(""), 1800);
+    }
+  }
+
+
+  function toggleWakeWordMode() {
+    if (wakeWordActiveRef.current) {
+      stopWakeWordMode();
+      return;
+    }
+
+    void startWakeWordMode();
+  }
+
+
+  async function startWakeWordMode() {
+    if (
+      backendConnection !== "online" ||
+      isRecording ||
+      isThinking ||
+      isTranscribing ||
+      isConversationMode ||
+      fileLoading ||
+      speakingMessageId !== null
+    ) {
+      setVoiceStatus(
+        backendConnection !== "online"
+          ? "❌ Start the backend before enabling wake-word mode"
+          : "Finish the current action before enabling wake-word mode"
+      );
+      window.setTimeout(() => setVoiceStatus(""), 2400);
+      return;
+    }
+
+    wakeWordActiveRef.current = true;
+    setIsWakeWordActive(true);
+    setVoiceStatus("👂 Connecting to the local wake-word detector...");
+
+    let stream: MediaStream | null = null;
+    let context: AudioContext | null = null;
+    let socket: WebSocket | null = null;
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      if (!wakeWordActiveRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      wakeMediaStreamRef.current = stream;
+
+      socket = new WebSocket("ws://127.0.0.1:8000/wake-word");
+      wakeSocketRef.current = socket;
+
+      let wakeReady = false;
+
+      socket.addEventListener("message", (event) => {
+        if (!wakeWordActiveRef.current) {
+          return;
+        }
+
+        let payload: {
+          type?: string;
+          phrase?: string;
+          message?: string;
+          score?: number;
+        };
+
+        try {
+          payload = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+
+        if (payload.type === "ready") {
+          wakeReady = true;
+          setVoiceStatus("👂 Wake-word standby ready · Say “Hey Jarvis”");
+          return;
+        }
+
+        if (payload.type === "error") {
+          const message = payload.message || "Local wake-word detector failed";
+          stopWakeWordMode(false);
+          setVoiceStatus("❌ " + message);
+          return;
+        }
+
+        if (payload.type === "wake_word_detected") {
+          stopWakeWordMode(false);
+
+          // After the wake phrase, start the existing hands-free voice loop.
+          // Speak the request after the Listening status appears.
+          conversationModeRef.current = true;
+          setIsConversationMode(true);
+          setVoiceStatus("✅ Hey Jarvis detected · Listening for your request...");
+
+          window.setTimeout(() => {
+            if (conversationModeRef.current) {
+              void startRecording();
+            }
+          }, 450);
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (wakeWordActiveRef.current) {
+          stopWakeWordMode(false);
+          setVoiceStatus("⚠️ Wake-word connection closed");
+        }
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          reject(new Error("Wake-word server connection timed out"));
+        }, 10000);
+
+        socket?.addEventListener(
+          "open",
+          () => {
+            window.clearTimeout(timeoutId);
+            resolve();
+          },
+          { once: true }
+        );
+
+        socket?.addEventListener(
+          "error",
+          () => {
+            window.clearTimeout(timeoutId);
+            reject(new Error("Could not connect to /wake-word"));
+          },
+          { once: true }
+        );
+
+        socket?.addEventListener(
+          "close",
+          () => {
+            window.clearTimeout(timeoutId);
+          },
+          { once: true }
+        );
+      });
+
+      if (!wakeWordActiveRef.current) {
+        return;
+      }
+
+      context = new AudioContext();
+      await context.resume();
+
+      if (!wakeWordActiveRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        if (context.state !== "closed") {
+          await context.close();
+        }
+        return;
+      }
+
+      wakeAudioContextRef.current = context;
+
+      const source = context.createMediaStreamSource(stream);
+      wakeSourceRef.current = source;
+
+      // ScriptProcessor is used for broad browser support. Resample the
+      // browser's microphone rate to 16 kHz mono before sending short PCM frames.
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      wakeProcessorRef.current = processor;
+
+      let resampleCarry = new Float32Array(0);
+      let resamplePosition = 0;
+      let pendingPcm = new Int16Array(0);
+
+      processor.onaudioprocess = (audioEvent) => {
+        audioEvent.outputBuffer.getChannelData(0).fill(0);
+
+        if (
+          !wakeWordActiveRef.current ||
+          !wakeReady ||
+          socket?.readyState !== WebSocket.OPEN
+        ) {
+          return;
+        }
+
+        const input = audioEvent.inputBuffer.getChannelData(0);
+        const combined = new Float32Array(resampleCarry.length + input.length);
+        combined.set(resampleCarry);
+        combined.set(input, resampleCarry.length);
+
+        const step = context!.sampleRate / 16000;
+        const resampled: number[] = [];
+
+        while (resamplePosition + 1 < combined.length) {
+          const left = Math.floor(resamplePosition);
+          const fraction = resamplePosition - left;
+
+          resampled.push(
+            combined[left] * (1 - fraction) +
+            combined[left + 1] * fraction
+          );
+
+          resamplePosition += step;
+        }
+
+        const consumedSamples = Math.floor(resamplePosition);
+        resampleCarry = combined.slice(consumedSamples);
+        resamplePosition -= consumedSamples;
+
+        if (resampled.length === 0) {
+          return;
+        }
+
+        const converted = new Int16Array(resampled.length);
+
+        for (let i = 0; i < resampled.length; i += 1) {
+          const sample = Math.max(-1, Math.min(1, resampled[i]));
+          converted[i] = sample < 0
+            ? Math.round(sample * 32768)
+            : Math.round(sample * 32767);
+        }
+
+        const joined = new Int16Array(pendingPcm.length + converted.length);
+        joined.set(pendingPcm);
+        joined.set(converted, pendingPcm.length);
+
+        let offset = 0;
+
+        while (joined.length - offset >= 1280) {
+          const frame = joined.slice(offset, offset + 1280);
+
+          if (
+            wakeWordActiveRef.current &&
+            socket?.readyState === WebSocket.OPEN
+          ) {
+            socket.send(frame.buffer);
+          }
+
+          offset += 1280;
+        }
+
+        pendingPcm = joined.slice(offset);
+      };
+
+      source.connect(processor);
+      processor.connect(context.destination);
+    } catch (error) {
+      console.error("Wake-word setup error:", error);
+
+      if (wakeWordActiveRef.current) {
+        stopWakeWordMode(false);
+        setVoiceStatus(
+          error instanceof Error
+            ? "❌ " + error.message
+            : "❌ Could not start local wake-word mode"
+        );
+      } else {
+        releaseWakeWordResources();
+      }
+    }
+  }
+
 
   function toggleConversationMode() {
     if (conversationModeRef.current) {
@@ -2119,6 +2477,24 @@ function App() {
     return () => {
       requestControllerRef.current?.abort();
       conversationModeRef.current = false;
+      wakeWordActiveRef.current = false;
+
+      wakeProcessorRef.current && (wakeProcessorRef.current.onaudioprocess = null);
+      wakeProcessorRef.current?.disconnect();
+      wakeSourceRef.current?.disconnect();
+      wakeMediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      if (
+        wakeAudioContextRef.current &&
+        wakeAudioContextRef.current.state !== "closed"
+      ) {
+        void wakeAudioContextRef.current.close();
+      }
+      if (
+        wakeSocketRef.current &&
+        wakeSocketRef.current.readyState < WebSocket.CLOSING
+      ) {
+        wakeSocketRef.current.close(1000, "App unmounted");
+      }
 
       if (
         mediaRecorderRef.current &&
@@ -2569,6 +2945,41 @@ function App() {
           </button>
 
 
+          {/* LOCAL WAKE-WORD MODE */}
+
+          <button
+            className={
+              `composer-icon wake-word-control ${isWakeWordActive ? "active" : ""}`
+            }
+            type="button"
+            title={
+              isWakeWordActive
+                ? "Stop wake-word standby"
+                : "Enable wake-word standby (Hey Jarvis)"
+            }
+            aria-label={
+              isWakeWordActive
+                ? "Stop wake-word standby"
+                : "Enable wake-word standby"
+            }
+            aria-pressed={isWakeWordActive}
+            onClick={toggleWakeWordMode}
+            disabled={
+              !isWakeWordActive &&
+              (
+                isRecording ||
+                isThinking ||
+                isTranscribing ||
+                isConversationMode ||
+                fileLoading ||
+                speakingMessageId !== null
+              )
+            }
+          >
+            👂
+          </button>
+
+
           {/* MICROPHONE */}
 
           <button
@@ -2705,6 +3116,10 @@ function App() {
               : isTranscribing
 
                 ? "🧠 Converting speech to text..."
+
+                : isWakeWordActive
+
+                ? "👂 Wake-word standby · Say “Hey Jarvis”"
 
                 : isRecording
 
