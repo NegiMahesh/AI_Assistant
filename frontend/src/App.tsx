@@ -1545,6 +1545,7 @@ function App() {
           "close",
           () => {
             window.clearTimeout(timeoutId);
+            reject(new Error("Wake-word connection closed before opening"));
           },
           { once: true }
         );
@@ -1694,6 +1695,7 @@ function App() {
       isRecording ||
       isThinking ||
       isTranscribing ||
+      isWakeWordActive ||
       fileLoading ||
       speakingMessageId !== null
     ) {
@@ -2936,6 +2938,7 @@ function App() {
                 isRecording ||
                 isThinking ||
                 isTranscribing ||
+                isWakeWordActive ||
                 fileLoading ||
                 speakingMessageId !== null
               )
