@@ -1622,11 +1622,10 @@ function App() {
         const converted = new Int16Array(resampled.length);
 
         for (let i = 0; i < resampled.length; i += 1) {
-          // The browser microphone was reaching the detector at a very low
-          // level. Apply modest local gain before int16 conversion; clamp to
-          // the valid PCM range to prevent overflow/clipping.
-          const amplified = resampled[i] * 6;
-          const sample = Math.max(-1, Math.min(1, amplified));
+          // AudioContext microphone samples are already normalized to [-1, 1].
+          // Preserve the original level; large software gain can clip the signal
+          // and make wake-word recognition less reliable.
+          const sample = Math.max(-1, Math.min(1, resampled[i]));
           converted[i] = sample < 0
             ? Math.round(sample * 32768)
             : Math.round(sample * 32767);
