@@ -2959,6 +2959,7 @@ async def wake_word_detection(websocket: WebSocket):
         )
 
         pending_audio = np.empty(0, dtype=np.int16)
+        frame_count = 0
 
         while True:
             audio_bytes = await websocket.receive_bytes()
@@ -2988,6 +2989,19 @@ async def wake_word_detection(websocket: WebSocket):
                     scores.items(), key=lambda item: float(item[1])
                 )
                 score = float(score)
+                frame_count += 1
+
+                # Print short periodic diagnostics to distinguish silent microphone
+                # input from a wake-word model that is receiving audio but not matching.
+                if frame_count % 25 == 0:
+                    rms = float(
+                        np.sqrt(np.mean(audio_frame.astype(np.float32) ** 2))
+                    )
+                    print(
+                        f"[Wake-word debug] RMS={rms:.1f}, "
+                        f"model={model_name}, score={score:.3f}, "
+                        f"threshold={WAKE_WORD_THRESHOLD}"
+                    )
 
                 if score >= WAKE_WORD_THRESHOLD:
                     await websocket.send_json(
