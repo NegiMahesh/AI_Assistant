@@ -1655,6 +1655,13 @@ function App() {
     } catch (error) {
       console.error("Wake-word setup error:", error);
 
+      stream?.getTracks().forEach((track) => track.stop());
+      if (context && context.state !== "closed") {
+        void context.close().catch((closeError) => {
+          console.debug("Wake-word setup cleanup:", closeError);
+        });
+      }
+
       if (wakeWordActiveRef.current) {
         stopWakeWordMode(false);
         setVoiceStatus(
@@ -2481,8 +2488,10 @@ function App() {
       conversationModeRef.current = false;
       wakeWordActiveRef.current = false;
 
-      wakeProcessorRef.current && (wakeProcessorRef.current.onaudioprocess = null);
-      wakeProcessorRef.current?.disconnect();
+      if (wakeProcessorRef.current) {
+        wakeProcessorRef.current.onaudioprocess = null;
+        wakeProcessorRef.current.disconnect();
+      }
       wakeSourceRef.current?.disconnect();
       wakeMediaStreamRef.current?.getTracks().forEach((track) => track.stop());
       if (
