@@ -202,7 +202,13 @@ MAX_MEMORY_CANDIDATE_CHARS = 1000
 
 
 # Phase 22.3 — lazily load one local wake-word model on demand.
-WAKE_WORD_THRESHOLD = 0.55
+# Calibrated for this project's low-confidence microphone scores. A lower
+# threshold is paired with an energy gate and repeated-hit window to reduce
+# false activations compared with accepting a single weak score.
+WAKE_WORD_THRESHOLD = 0.12
+WAKE_WORD_MIN_RMS = 500.0
+WAKE_WORD_REQUIRED_HITS = 2
+WAKE_WORD_WINDOW_FRAMES = 8
 WAKE_WORD_MODEL = None
 WAKE_WORD_MODEL_LOCK = threading.Lock()
 WAKE_WORD_PREDICT_LOCK = threading.Lock()
@@ -2959,6 +2965,7 @@ async def wake_word_detection(websocket: WebSocket):
 
         pending_audio = np.empty(0, dtype=np.int16)
         frame_count = 0
+        recent_wake_hits = []
 
         while True:
             audio_bytes = await websocket.receive_bytes()
@@ -2990,19 +2997,28 @@ async def wake_word_detection(websocket: WebSocket):
                 score = float(score)
                 frame_count += 1
 
-                # Print short periodic diagnostics to distinguish silent microphone
-                # input from a wake-word model that is receiving audio but not matching.
+                # Gate weak model scores on actual microphone energy, then require
+                # repeated matches in a short rolling window. This is more robust
+                # than triggering on one noisy/isolated low-confidence frame.
+                rms = float(
+                    np.sqrt(np.mean(audio_frame.astype(np.float32) ** 2))
+                )
+                recent_wake_hits.append(
+                    score >= WAKE_WORD_THRESHOLD and rms >= WAKE_WORD_MIN_RMS
+                )
+                if len(recent_wake_hits) > WAKE_WORD_WINDOW_FRAMES:
+                    recent_wake_hits.pop(0)
+
                 if frame_count % 25 == 0:
-                    rms = float(
-                        np.sqrt(np.mean(audio_frame.astype(np.float32) ** 2))
-                    )
                     print(
                         f"[Wake-word debug] RMS={rms:.1f}, "
                         f"model={model_name}, score={score:.3f}, "
-                        f"threshold={WAKE_WORD_THRESHOLD}"
+                        f"threshold={WAKE_WORD_THRESHOLD}, "
+                        f"hits={sum(recent_wake_hits)}/"
+                        f"{len(recent_wake_hits)}"
                     )
 
-                if score >= WAKE_WORD_THRESHOLD:
+                if sum(recent_wake_hits) >= WAKE_WORD_REQUIRED_HITS:
                     await websocket.send_json(
                         {
                             "type": "wake_word_detected",
