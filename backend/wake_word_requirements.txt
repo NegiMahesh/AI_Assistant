@@ -1,0 +1,2 @@
+# Optional local wake-word detection dependency for Phase 22.3
+openwakeword==0.6.0

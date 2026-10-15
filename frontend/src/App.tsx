@@ -464,6 +464,14 @@ function App() {
     useState(false);
 
 
+  const [isConversationMode, setIsConversationMode] =
+    useState(false);
+
+
+  const [isWakeWordActive, setIsWakeWordActive] =
+    useState(false);
+
+
   /* =======================================================
      TTS
   ======================================================= */
@@ -544,6 +552,38 @@ function App() {
     useRef<AbortController | null>(
       null
     );
+
+
+  const conversationModeRef =
+    useRef(false);
+
+
+  const wakeWordActiveRef =
+    useRef(false);
+
+
+  const wakeSocketRef =
+    useRef<WebSocket | null>(null);
+
+
+  const wakeMediaStreamRef =
+    useRef<MediaStream | null>(null);
+
+
+  const wakeAudioContextRef =
+    useRef<AudioContext | null>(null);
+
+
+  const wakeSourceRef =
+    useRef<MediaStreamAudioSourceNode | null>(null);
+
+
+  const wakeProcessorRef =
+    useRef<ScriptProcessorNode | null>(null);
+
+
+  const handleSendRef =
+    useRef<((voiceText?: string, speakResponse?: boolean) => Promise<void>) | null>(null);
 
 
   /* =======================================================
@@ -1010,15 +1050,18 @@ function App() {
      SEND MESSAGE
   ======================================================= */
 
-  async function handleSend() {
+  async function handleSend(
+    voiceText?: string,
+    speakResponse = false
+  ) {
     const text =
-      messageInput.trim();
+      (voiceText ?? messageInput).trim();
 
     if (
       !text ||
       isThinking ||
       fileLoading ||
-      isTranscribing
+      (isTranscribing && !voiceText)
     ) {
       return;
     }
@@ -1042,6 +1085,13 @@ function App() {
           },
         ]
       );
+
+      if (speakResponse) {
+        setVoiceStatus("❌ Assistant backend is offline");
+        if (conversationModeRef.current) {
+          resumeConversationListening();
+        }
+      }
 
       return;
     }
@@ -1176,6 +1226,20 @@ function App() {
                   : message
             )
         );
+
+        if (speakResponse) {
+          setVoiceStatus("🔊 Speaking response...");
+          await handleSpeak(
+            thinkingId,
+            response.response,
+            true
+          );
+        }
+      } else if (speakResponse) {
+        setVoiceStatus("⚠️ The assistant returned no spoken response");
+        if (conversationModeRef.current) {
+          resumeConversationListening();
+        }
       }
     } catch (error) {
       if (
@@ -1201,6 +1265,10 @@ function App() {
                   : message
             )
         );
+
+        if (speakResponse && conversationModeRef.current) {
+          resumeConversationListening();
+        }
 
         return;
       }
@@ -1231,6 +1299,17 @@ function App() {
           )
       );
 
+      if (speakResponse) {
+        setVoiceStatus("❌ Voice request failed");
+        if (conversationModeRef.current) {
+          window.setTimeout(() => {
+            if (conversationModeRef.current) {
+              resumeConversationListening();
+            }
+          }, 1000);
+        }
+      }
+
       void checkBackend();
     } finally {
       setIsThinking(
@@ -1241,6 +1320,9 @@ function App() {
         null;
     }
   }
+
+  // Refresh the handler reference so later voice turns use current chat state.
+  handleSendRef.current = handleSend;
 
 
   /* =======================================================
@@ -1256,162 +1338,585 @@ function App() {
      VOICE RECORDING
   ======================================================= */
 
-  async function startRecording() {
+  /* =======================================================
+     PHASE 22.3 — LOCAL WAKE-WORD MODE
+  ======================================================= */
+
+  function releaseWakeWordResources() {
+    const processor = wakeProcessorRef.current;
+    wakeProcessorRef.current = null;
+
+    if (processor) {
+      processor.onaudioprocess = null;
+      try {
+        processor.disconnect();
+      } catch {
+        /* Already disconnected. */
+      }
+    }
+
+    const source = wakeSourceRef.current;
+    wakeSourceRef.current = null;
+
+    if (source) {
+      try {
+        source.disconnect();
+      } catch {
+        /* Already disconnected. */
+      }
+    }
+
+    const stream = wakeMediaStreamRef.current;
+    wakeMediaStreamRef.current = null;
+    stream?.getTracks().forEach((track) => track.stop());
+
+    const context = wakeAudioContextRef.current;
+    wakeAudioContextRef.current = null;
+
+    if (context && context.state !== "closed") {
+      void context.close().catch((error) => {
+        console.debug("Wake-word AudioContext cleanup:", error);
+      });
+    }
+
+    const socket = wakeSocketRef.current;
+    wakeSocketRef.current = null;
+
+    if (socket && socket.readyState < WebSocket.CLOSING) {
+      try {
+        socket.close(1000, "Wake-word mode stopped");
+      } catch {
+        /* Socket may already be closing. */
+      }
+    }
+  }
+
+
+  function stopWakeWordMode(showStatus = true) {
+    wakeWordActiveRef.current = false;
+    setIsWakeWordActive(false);
+    releaseWakeWordResources();
+
+    if (showStatus) {
+      setVoiceStatus("Wake-word standby stopped");
+      window.setTimeout(() => setVoiceStatus(""), 1800);
+    }
+  }
+
+
+  function toggleWakeWordMode() {
+    if (wakeWordActiveRef.current) {
+      stopWakeWordMode();
+      return;
+    }
+
+    void startWakeWordMode();
+  }
+
+
+  async function startWakeWordMode() {
+    if (
+      backendConnection !== "online" ||
+      isRecording ||
+      isThinking ||
+      isTranscribing ||
+      isConversationMode ||
+      fileLoading ||
+      speakingMessageId !== null
+    ) {
+      setVoiceStatus(
+        backendConnection !== "online"
+          ? "❌ Start the backend before enabling wake-word mode"
+          : "Finish the current action before enabling wake-word mode"
+      );
+      window.setTimeout(() => setVoiceStatus(""), 2400);
+      return;
+    }
+
+    wakeWordActiveRef.current = true;
+    setIsWakeWordActive(true);
+    setVoiceStatus("👂 Connecting to the local wake-word detector...");
+
+    let stream: MediaStream | null = null;
+    let context: AudioContext | null = null;
+    let socket: WebSocket | null = null;
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+
+      if (!wakeWordActiveRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      wakeMediaStreamRef.current = stream;
+
+      socket = new WebSocket("ws://127.0.0.1:8000/wake-word");
+      wakeSocketRef.current = socket;
+
+      let wakeReady = false;
+
+      socket.addEventListener("message", (event) => {
+        if (!wakeWordActiveRef.current) {
+          return;
+        }
+
+        let payload: {
+          type?: string;
+          phrase?: string;
+          message?: string;
+          score?: number;
+        };
+
+        try {
+          payload = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+
+        if (payload.type === "ready") {
+          wakeReady = true;
+          setVoiceStatus("👂 Wake-word standby ready · Say “Hey Jarvis”");
+          return;
+        }
+
+        if (payload.type === "error") {
+          const message = payload.message || "Local wake-word detector failed";
+          stopWakeWordMode(false);
+          setVoiceStatus("❌ " + message);
+          return;
+        }
+
+        if (payload.type === "wake_word_detected") {
+          stopWakeWordMode(false);
+
+          // After the wake phrase, start the existing hands-free voice loop.
+          // Speak the request after the Listening status appears.
+          conversationModeRef.current = true;
+          setIsConversationMode(true);
+          setVoiceStatus("✅ Hey Jarvis detected · Listening for your request...");
+
+          window.setTimeout(() => {
+            if (conversationModeRef.current) {
+              void startRecording();
+            }
+          }, 450);
+        }
+      });
+
+      socket.addEventListener("close", () => {
+        if (wakeWordActiveRef.current) {
+          stopWakeWordMode(false);
+          setVoiceStatus("⚠️ Wake-word connection closed");
+        }
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        const timeoutId = window.setTimeout(() => {
+          reject(new Error("Wake-word server connection timed out"));
+        }, 10000);
+
+        socket?.addEventListener(
+          "open",
+          () => {
+            window.clearTimeout(timeoutId);
+            resolve();
+          },
+          { once: true }
+        );
+
+        socket?.addEventListener(
+          "error",
+          () => {
+            window.clearTimeout(timeoutId);
+            reject(new Error("Could not connect to /wake-word"));
+          },
+          { once: true }
+        );
+
+        socket?.addEventListener(
+          "close",
+          () => {
+            window.clearTimeout(timeoutId);
+            reject(new Error("Wake-word connection closed before opening"));
+          },
+          { once: true }
+        );
+      });
+
+      if (!wakeWordActiveRef.current) {
+        return;
+      }
+
+      context = new AudioContext();
+      await context.resume();
+
+      if (!wakeWordActiveRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        if (context.state !== "closed") {
+          await context.close();
+        }
+        return;
+      }
+
+      wakeAudioContextRef.current = context;
+
+      const source = context.createMediaStreamSource(stream);
+      wakeSourceRef.current = source;
+
+      // ScriptProcessor is used for broad browser support. Resample the
+      // browser's microphone rate to 16 kHz mono before sending short PCM frames.
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      wakeProcessorRef.current = processor;
+
+      let resampleCarry = new Float32Array(0);
+      let resamplePosition = 0;
+      let pendingPcm = new Int16Array(0);
+
+      processor.onaudioprocess = (audioEvent) => {
+        audioEvent.outputBuffer.getChannelData(0).fill(0);
+
+        if (
+          !wakeWordActiveRef.current ||
+          !wakeReady ||
+          socket?.readyState !== WebSocket.OPEN
+        ) {
+          return;
+        }
+
+        const input = audioEvent.inputBuffer.getChannelData(0);
+        const combined = new Float32Array(resampleCarry.length + input.length);
+        combined.set(resampleCarry);
+        combined.set(input, resampleCarry.length);
+
+        const step = context!.sampleRate / 16000;
+        const resampled: number[] = [];
+
+        while (resamplePosition + 1 < combined.length) {
+          const left = Math.floor(resamplePosition);
+          const fraction = resamplePosition - left;
+
+          resampled.push(
+            combined[left] * (1 - fraction) +
+            combined[left + 1] * fraction
+          );
+
+          resamplePosition += step;
+        }
+
+        const consumedSamples = Math.floor(resamplePosition);
+        resampleCarry = combined.slice(consumedSamples);
+        resamplePosition -= consumedSamples;
+
+        if (resampled.length === 0) {
+          return;
+        }
+
+        const converted = new Int16Array(resampled.length);
+
+        for (let i = 0; i < resampled.length; i += 1) {
+          // AudioContext microphone samples are already normalized to [-1, 1].
+          // Preserve the original level; large software gain can clip the signal
+          // and make wake-word recognition less reliable.
+          const sample = Math.max(-1, Math.min(1, resampled[i]));
+          converted[i] = sample < 0
+            ? Math.round(sample * 32768)
+            : Math.round(sample * 32767);
+        }
+
+        const joined = new Int16Array(pendingPcm.length + converted.length);
+        joined.set(pendingPcm);
+        joined.set(converted, pendingPcm.length);
+
+        let offset = 0;
+
+        while (joined.length - offset >= 1280) {
+          const frame = joined.slice(offset, offset + 1280);
+
+          if (
+            wakeWordActiveRef.current &&
+            socket?.readyState === WebSocket.OPEN
+          ) {
+            socket.send(frame.buffer);
+          }
+
+          offset += 1280;
+        }
+
+        pendingPcm = joined.slice(offset);
+      };
+
+      source.connect(processor);
+      processor.connect(context.destination);
+    } catch (error) {
+      console.error("Wake-word setup error:", error);
+
+      stream?.getTracks().forEach((track) => track.stop());
+      if (context && context.state !== "closed") {
+        void context.close().catch((closeError) => {
+          console.debug("Wake-word setup cleanup:", closeError);
+        });
+      }
+
+      if (wakeWordActiveRef.current) {
+        stopWakeWordMode(false);
+        setVoiceStatus(
+          error instanceof Error
+            ? "❌ " + error.message
+            : "❌ Could not start local wake-word mode"
+        );
+      } else {
+        releaseWakeWordResources();
+      }
+    }
+  }
+
+
+  function toggleConversationMode() {
+    if (conversationModeRef.current) {
+      conversationModeRef.current = false;
+      setIsConversationMode(false);
+
+      if (mediaRecorderRef.current?.state === "recording") {
+        setVoiceStatus("🧠 Finishing the current recording...");
+        stopRecording();
+      } else {
+        setVoiceStatus("Conversation mode stopped");
+        window.setTimeout(() => setVoiceStatus(""), 1800);
+      }
+
+      return;
+    }
+
+    if (backendConnection !== "online") {
+      setVoiceStatus("❌ Start the backend before using conversation mode");
+      window.setTimeout(() => setVoiceStatus(""), 2500);
+      return;
+    }
+
     if (
       isRecording ||
       isThinking ||
       isTranscribing ||
-      fileLoading
+      isWakeWordActive ||
+      fileLoading ||
+      speakingMessageId !== null
+    ) {
+      setVoiceStatus("Finish the current action before starting conversation mode");
+      window.setTimeout(() => setVoiceStatus(""), 2500);
+      return;
+    }
+
+    conversationModeRef.current = true;
+    setIsConversationMode(true);
+    setVoiceStatus("🎤 Starting hands-free conversation...");
+    void startRecording();
+  }
+
+
+  /* =======================================================
+     VOICE RECORDING + LOCAL VOICE ACTIVITY DETECTION
+  ======================================================= */
+
+  async function startRecording(automaticRestart = false) {
+    if (
+      mediaRecorderRef.current ||
+      (
+        !automaticRestart &&
+        (
+          isRecording ||
+          isThinking ||
+          isTranscribing ||
+          fileLoading
+        )
+      )
     ) {
       return;
     }
 
+    let stream: MediaStream | null = null;
+    let audioContext: AudioContext | null = null;
+
     try {
-      const stream =
-        await navigator
-          .mediaDevices
-          .getUserMedia({
-            audio: true,
-          });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
 
-      let mimeType =
-        "audio/webm";
+      const recordingStream = stream;
+      let analyser: AnalyserNode | null = null;
+      let sourceNode: MediaStreamAudioSourceNode | null = null;
+      let vadIntervalId: number | null = null;
+      let vadBuffer = new Float32Array(0);
+      let voiceCandidateSince = 0;
+      let lastSpeechAt = 0;
+      let speechDetected = false;
 
-      if (
-        !MediaRecorder.isTypeSupported(
-          mimeType
-        )
-      ) {
-        mimeType =
-          "audio/webm;codecs=opus";
+      let mimeType = "audio/webm";
+
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "audio/webm;codecs=opus";
       }
 
-      const recorder =
-        new MediaRecorder(
-          stream,
-          {
-            mimeType,
-          }
-        );
+      const recorder = new MediaRecorder(recordingStream, {
+        mimeType,
+      });
 
-      audioChunksRef.current =
-        [];
+      if (conversationModeRef.current) {
+        audioContext = new AudioContext();
+        await audioContext.resume();
 
-      recorder.ondataavailable =
-        (event) => {
-          if (
-            event.data.size >
-            0
-          ) {
-            audioChunksRef.current.push(
-              event.data
-            );
-          }
-        };
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 1024;
 
-      recorder.onstop =
-        async () => {
-          stream
-            .getTracks()
-            .forEach(
-              (track) =>
-                track.stop()
-            );
+        sourceNode = audioContext.createMediaStreamSource(recordingStream);
+        sourceNode.connect(analyser);
 
-          const blob =
-            new Blob(
-              audioChunksRef.current,
-              {
-                type:
-                  recorder.mimeType ||
-                  "audio/webm",
-              }
-            );
+        vadBuffer = new Float32Array(analyser.fftSize);
+      }
 
-          setIsTranscribing(
-            true
-          );
+      audioChunksRef.current = [];
 
-          setVoiceStatus(
-            "🧠 Converting speech to text..."
-          );
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
 
+      recorder.onstop = async () => {
+        if (vadIntervalId !== null) {
+          window.clearInterval(vadIntervalId);
+          vadIntervalId = null;
+        }
+
+        recordingStream.getTracks().forEach((track) => track.stop());
+        sourceNode?.disconnect();
+
+        if (audioContext && audioContext.state !== "closed") {
           try {
-            const text =
-              await transcribeAudio(
-                blob
-              );
-
-            if (
-              text.trim()
-            ) {
-              setMessageInput(
-                text.trim()
-              );
-
-              setVoiceStatus(
-                "✅ Speech converted"
-              );
-            } else {
-              setVoiceStatus(
-                "⚠️ No speech detected"
-              );
-            }
-
-            window.setTimeout(
-              () => {
-                setVoiceStatus(
-                  ""
-                );
-              },
-              1800
-            );
+            await audioContext.close();
           } catch (error) {
-            console.error(
-              "Transcription error:",
-              error
-            );
-
-            setVoiceStatus(
-              "❌ Transcription failed"
-            );
-
-            window.setTimeout(
-              () => {
-                setVoiceStatus(
-                  ""
-                );
-              },
-              2200
-            );
-          } finally {
-            setIsTranscribing(
-              false
-            );
+            console.debug("AudioContext cleanup:", error);
           }
-        };
+        }
+
+        setIsRecording(false);
+
+        const blob = new Blob(audioChunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+
+        setIsTranscribing(true);
+        setVoiceStatus("🧠 Converting speech to text...");
+
+        try {
+          const text = await transcribeAudio(blob);
+
+          if (text.trim()) {
+            const transcript = text.trim();
+
+            setMessageInput(transcript);
+            setVoiceStatus("🧠 Processing your request...");
+
+            // Keep the existing router, assistant response, and Piper TTS flow.
+            await handleSendRef.current?.(transcript, true);
+          } else {
+            setVoiceStatus("⚠️ No speech detected");
+            if (conversationModeRef.current) {
+              resumeConversationListening();
+            } else {
+              window.setTimeout(() => setVoiceStatus(""), 1800);
+            }
+          }
+        } catch (error) {
+          console.error("Transcription error:", error);
+          setVoiceStatus("❌ Transcription failed");
+          if (conversationModeRef.current) {
+            resumeConversationListening();
+          } else {
+            window.setTimeout(() => setVoiceStatus(""), 2200);
+          }
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
 
       recorder.start();
 
-      mediaRecorderRef.current =
-        recorder;
-
-      setIsRecording(
-        true
-      );
-
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
       setVoiceStatus(
-        "🎤 Listening..."
-      );
-    } catch (error) {
-      console.error(
-        "Microphone error:",
-        error
+        conversationModeRef.current
+          ? "🎤 Listening... speak naturally, then pause to send"
+          : "🎤 Listening..."
       );
 
-      alert(
-        "Microphone access failed. Please allow microphone permission."
-      );
+      // Detect a complete utterance locally: sustained speech followed by
+      // 1.2 seconds of silence. Audio is only uploaded when recording stops.
+      if (analyser) {
+        vadIntervalId = window.setInterval(() => {
+          if (
+            !conversationModeRef.current ||
+            recorder.state !== "recording" ||
+            !analyser
+          ) {
+            return;
+          }
+
+          analyser.getFloatTimeDomainData(vadBuffer);
+
+          let energy = 0;
+
+          for (let i = 0; i < vadBuffer.length; i += 1) {
+            energy += vadBuffer[i] * vadBuffer[i];
+          }
+
+          const rms = Math.sqrt(energy / vadBuffer.length);
+          const now = Date.now();
+
+          if (rms > 0.025) {
+            if (voiceCandidateSince === 0) {
+              voiceCandidateSince = now;
+            }
+
+            if (now - voiceCandidateSince >= 180) {
+              speechDetected = true;
+              lastSpeechAt = now;
+            }
+          } else {
+            voiceCandidateSince = 0;
+          }
+
+          if (speechDetected && now - lastSpeechAt >= 1200) {
+            stopRecording();
+          }
+        }, 50);
+      }
+    } catch (error) {
+      console.error("Microphone error:", error);
+
+      stream?.getTracks().forEach((track) => track.stop());
+
+      if (audioContext && audioContext.state !== "closed") {
+        void audioContext.close().catch((closeError) => {
+          console.debug("AudioContext cleanup:", closeError);
+        });
+      }
+
+      if (conversationModeRef.current) {
+        conversationModeRef.current = false;
+        setIsConversationMode(false);
+      }
+
+      setVoiceStatus("❌ Microphone access failed");
+      alert("Microphone access failed. Please allow microphone permission.");
+      window.setTimeout(() => setVoiceStatus(""), 2500);
     }
   }
 
@@ -1461,13 +1966,33 @@ function App() {
   }
 
 
+  function resumeConversationListening() {
+    if (!conversationModeRef.current) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      if (
+        !conversationModeRef.current ||
+        mediaRecorderRef.current
+      ) {
+        return;
+      }
+
+      setVoiceStatus("🎤 Listening for your next request...");
+      void startRecording(true);
+    }, 500);
+  }
+
+
   /* =======================================================
      TEXT TO SPEECH
   ======================================================= */
 
   async function handleSpeak(
     messageId: number,
-    text: string
+    text: string,
+    voiceTurn = false
   ) {
     if (!text.trim()) {
       return;
@@ -1515,6 +2040,16 @@ function App() {
 
           currentAudioRef.current =
             null;
+
+          if (voiceTurn) {
+            if (conversationModeRef.current) {
+              setVoiceStatus("✅ Reply finished · Listening again...");
+              resumeConversationListening();
+            } else {
+              setVoiceStatus("✅ Voice reply finished");
+              window.setTimeout(() => setVoiceStatus(""), 2200);
+            }
+          }
         };
 
       audio.onerror =
@@ -1525,6 +2060,16 @@ function App() {
 
           currentAudioRef.current =
             null;
+
+          if (voiceTurn) {
+            if (conversationModeRef.current) {
+              setVoiceStatus("⚠️ Audio playback failed · Listening again...");
+              resumeConversationListening();
+            } else {
+              setVoiceStatus("❌ Audio playback failed");
+              window.setTimeout(() => setVoiceStatus(""), 3000);
+            }
+          }
         };
 
       await audio.play();
@@ -1540,6 +2085,20 @@ function App() {
 
       currentAudioRef.current =
         null;
+
+      if (voiceTurn) {
+        if (conversationModeRef.current) {
+          setVoiceStatus("⚠️ Could not play response · Listening again...");
+          window.setTimeout(() => {
+            if (conversationModeRef.current) {
+              resumeConversationListening();
+            }
+          }, 1000);
+        } else {
+          setVoiceStatus("❌ Could not play the voice response");
+          window.setTimeout(() => setVoiceStatus(""), 3000);
+        }
+      }
     }
   }
 
@@ -1929,6 +2488,27 @@ function App() {
   useEffect(() => {
     return () => {
       requestControllerRef.current?.abort();
+      conversationModeRef.current = false;
+      wakeWordActiveRef.current = false;
+
+      if (wakeProcessorRef.current) {
+        wakeProcessorRef.current.onaudioprocess = null;
+        wakeProcessorRef.current.disconnect();
+      }
+      wakeSourceRef.current?.disconnect();
+      wakeMediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      if (
+        wakeAudioContextRef.current &&
+        wakeAudioContextRef.current.state !== "closed"
+      ) {
+        void wakeAudioContextRef.current.close();
+      }
+      if (
+        wakeSocketRef.current &&
+        wakeSocketRef.current.readyState < WebSocket.CLOSING
+      ) {
+        wakeSocketRef.current.close(1000, "App unmounted");
+      }
 
       if (
         mediaRecorderRef.current &&
@@ -2345,6 +2925,76 @@ function App() {
           />
 
 
+          {/* HANDS-FREE CONVERSATION MODE */}
+
+          <button
+            className={
+              `composer-icon conversation-control ${isConversationMode ? "active" : ""}`
+            }
+            type="button"
+            title={
+              isConversationMode
+                ? "Stop hands-free conversation"
+                : "Start hands-free conversation"
+            }
+            aria-label={
+              isConversationMode
+                ? "Stop hands-free conversation"
+                : "Start hands-free conversation"
+            }
+            aria-pressed={isConversationMode}
+            onClick={toggleConversationMode}
+            disabled={
+              !isConversationMode &&
+              (
+                isRecording ||
+                isThinking ||
+                isTranscribing ||
+                isWakeWordActive ||
+                fileLoading ||
+                speakingMessageId !== null
+              )
+            }
+          >
+            🔁
+          </button>
+
+
+          {/* LOCAL WAKE-WORD MODE */}
+
+          <button
+            className={
+              `composer-icon wake-word-control ${isWakeWordActive ? "active" : ""}`
+            }
+            type="button"
+            title={
+              isWakeWordActive
+                ? "Stop wake-word standby"
+                : "Enable wake-word standby (Hey Jarvis)"
+            }
+            aria-label={
+              isWakeWordActive
+                ? "Stop wake-word standby"
+                : "Enable wake-word standby"
+            }
+            aria-pressed={isWakeWordActive}
+            onClick={toggleWakeWordMode}
+            disabled={
+              !isWakeWordActive &&
+              (
+                isRecording ||
+                isThinking ||
+                isTranscribing ||
+                isConversationMode ||
+                fileLoading ||
+                speakingMessageId !== null
+              )
+            }
+          >
+            👂
+          </button>
+
+
           {/* MICROPHONE */}
 
           <button
@@ -2371,7 +3021,8 @@ function App() {
             disabled={
               isThinking ||
               isTranscribing ||
-              fileLoading
+              fileLoading ||
+              isConversationMode
             }
           >
 
@@ -2477,12 +3128,25 @@ function App() {
 
               ? "Generating response · Click ■ to stop"
 
-              : isRecording
+              : isTranscribing
 
-                ? "🎤 Listening..."
+                ? "🧠 Converting speech to text..."
 
-                : backendConnection ===
-                  "offline"
+                : isWakeWordActive
+
+                ? "👂 Wake-word standby · Say “Hey Jarvis”"
+
+                : isRecording
+
+                  ? isConversationMode
+                    ? "🎤 Hands-free listening · Pause briefly when you finish speaking"
+                    : "🎤 Listening..."
+
+                  : isConversationMode
+                    ? "Hands-free mode on · Speak naturally; a pause sends your request"
+
+                    : backendConnection ===
+                      "offline"
 
                   ? "Backend offline · Start FastAPI to continue"
 
