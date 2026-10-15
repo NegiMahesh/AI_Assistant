@@ -712,10 +712,10 @@ function App() {
   const checkBackend =
     useCallback(
       async () => {
-        setBackendConnection(
-          "checking"
-        );
-
+        // Keep the last known connection state during background health polls.
+        // The initial useState("checking") already covers the first page-load check;
+        // flipping to "checking" every 10 seconds makes the header flicker even
+        // while the backend is online or processing a long speech transcription.
         try {
           const data =
             await getBackendStatus();
