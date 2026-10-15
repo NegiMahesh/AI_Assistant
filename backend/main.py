@@ -220,7 +220,6 @@ def get_wake_word_model():
                 WAKE_WORD_MODEL = Model(
                     wakeword_models=["hey_jarvis"],
                     inference_framework="onnx",
-                    vad_threshold=0.5,
                 )
                 print("Local wake-word model loaded (Hey Jarvis, ONNX).")
 
