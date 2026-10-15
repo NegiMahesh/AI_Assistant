@@ -1,4 +1,7 @@
-from fastapi import FastAPI, UploadFile, File
+import asyncio
+import threading
+
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -196,6 +199,38 @@ MAX_PROMPT_HISTORY_CHARS = 6000
 MAX_PROMPT_MESSAGE_CHARS = 1200
 MAX_MEMORY_HISTORY_MESSAGES = 300
 MAX_MEMORY_CANDIDATE_CHARS = 1000
+
+
+# Phase 22.3 — lazily load one local wake-word model on demand.
+WAKE_WORD_THRESHOLD = 0.55
+WAKE_WORD_MODEL = None
+WAKE_WORD_MODEL_LOCK = threading.Lock()
+WAKE_WORD_PREDICT_LOCK = threading.Lock()
+
+
+def get_wake_word_model():
+    """Load the openWakeWord Hey Jarvis model only when a client enables it."""
+    global WAKE_WORD_MODEL
+
+    if WAKE_WORD_MODEL is None:
+        with WAKE_WORD_MODEL_LOCK:
+            if WAKE_WORD_MODEL is None:
+                from openwakeword.model import Model
+
+                WAKE_WORD_MODEL = Model(
+                    wakeword_models=["hey_jarvis"],
+                    inference_framework="onnx",
+                    vad_threshold=0.5,
+                )
+                print("Local wake-word model loaded (Hey Jarvis, ONNX).")
+
+    return WAKE_WORD_MODEL
+
+
+def predict_wake_word(model, audio_frame):
+    """Serialize inference because the model keeps rolling audio state."""
+    with WAKE_WORD_PREDICT_LOCK:
+        return model.predict(audio_frame)
 
 
 # =========================================================
@@ -2898,6 +2933,108 @@ async def transcribe(file: UploadFile = File(...)):
         if os.path.exists(temp_path):
 
             os.remove(temp_path)
+
+
+# =========================================================
+# PHASE 22.3 — LOCAL WAKE-WORD DETECTION
+# =========================================================
+# Browser audio is streamed as mono 16 kHz signed 16-bit PCM in
+# 80 ms frames. Detection runs locally through openWakeWord/ONNX.
+# Audio is never forwarded to a hosted speech service.
+# =========================================================
+
+
+@app.websocket("/wake-word")
+async def wake_word_detection(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        model = await asyncio.to_thread(get_wake_word_model)
+        await websocket.send_json(
+            {
+                "type": "ready",
+                "phrase": "Hey Jarvis",
+                "threshold": WAKE_WORD_THRESHOLD,
+            }
+        )
+
+        pending_audio = np.empty(0, dtype=np.int16)
+
+        while True:
+            audio_bytes = await websocket.receive_bytes()
+
+            if not audio_bytes:
+                continue
+
+            received = np.frombuffer(audio_bytes, dtype="<i2")
+            if received.size == 0:
+                continue
+
+            pending_audio = np.concatenate((pending_audio, received))
+
+            # openWakeWord expects 1280 samples = 80 ms at 16 kHz.
+            while pending_audio.size >= 1280:
+                audio_frame = pending_audio[:1280].copy()
+                pending_audio = pending_audio[1280:]
+
+                scores = await asyncio.to_thread(
+                    predict_wake_word, model, audio_frame
+                )
+
+                if not scores:
+                    continue
+
+                model_name, score = max(
+                    scores.items(), key=lambda item: float(item[1])
+                )
+                score = float(score)
+
+                if score >= WAKE_WORD_THRESHOLD:
+                    await websocket.send_json(
+                        {
+                            "type": "wake_word_detected",
+                            "phrase": "Hey Jarvis",
+                            "model": model_name,
+                            "score": score,
+                        }
+                    )
+                    return
+
+    except WebSocketDisconnect:
+        pass
+    except ModuleNotFoundError:
+        try:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": (
+                        "openWakeWord is not installed. Install "
+                        "backend/wake_word_requirements.txt and download "
+                        "the Hey Jarvis model."
+                    ),
+                }
+            )
+        except Exception:
+            pass
+    except Exception as error:
+        print("Wake-word detection error:", error)
+        try:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": (
+                        "Wake-word detection failed. Verify the openWakeWord "
+                        "package and Hey Jarvis model are installed."
+                    ),
+                }
+            )
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # =========================================================
