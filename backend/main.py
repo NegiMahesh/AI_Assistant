@@ -206,7 +206,7 @@ MAX_MEMORY_CANDIDATE_CHARS = 1000
 # threshold is paired with an energy gate and repeated-hit window to reduce
 # false activations compared with accepting a single weak score.
 WAKE_WORD_THRESHOLD = 0.12
-WAKE_WORD_MIN_RMS = 500.0
+WAKE_WORD_MIN_RMS = 75.0
 WAKE_WORD_REQUIRED_HITS = 2
 WAKE_WORD_WINDOW_FRAMES = 8
 WAKE_WORD_MODEL = None
@@ -3009,7 +3009,9 @@ async def wake_word_detection(websocket: WebSocket):
                 if len(recent_wake_hits) > WAKE_WORD_WINDOW_FRAMES:
                     recent_wake_hits.pop(0)
 
-                if frame_count % 25 == 0:
+                # Print regularly, plus every meaningful model-score spike so
+                # short detections are not hidden between periodic log samples.
+                if score >= 0.01 or frame_count % 25 == 0:
                     print(
                         f"[Wake-word debug] RMS={rms:.1f}, "
                         f"model={model_name}, score={score:.3f}, "
