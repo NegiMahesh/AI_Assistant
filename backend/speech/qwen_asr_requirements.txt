@@ -1,0 +1,4 @@
+# Official local Qwen3-ASR inference package and media decoder.
+# The 1.7B model is memory-intensive on CPU; see setup notes in the repository README.
+qwen-asr
+av
